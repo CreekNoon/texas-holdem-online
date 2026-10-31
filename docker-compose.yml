@@ -1,0 +1,18 @@
+# Docker Compose 编排配置
+# 启动: docker compose up -d
+# 查看日志: docker compose logs -f
+# 停止: docker compose down
+
+services:
+  poker:
+    build: .
+    container_name: texas-holdem
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    # 如需持久化（当前游戏状态为内存，重启后丢失，可按需扩展）
+    # volumes:
+    #   - ./data:/app/data

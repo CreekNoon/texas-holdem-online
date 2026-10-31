@@ -1,0 +1,25 @@
+# node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+*.log
+
+# cpolar 配置里有 authtoken，绝对不能上传
+.cpolar/
+tools/cpolar.exe
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Trae / 临时
+.trae-html-share-packages/
+.trae/
+.trae-cn/
+*.tmp
+test-*.js
+cpolar-tunnel*.log

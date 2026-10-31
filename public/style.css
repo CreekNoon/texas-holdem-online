@@ -1,0 +1,541 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #0a0e1a;
+  color: #e8e8e8;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.hidden { display: none !important; }
+
+.screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== 登录界面 ===== */
+#login-screen {
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, #1a3a2a 0%, #0a0e1a 70%);
+}
+
+.login-box {
+  background: rgba(20, 30, 40, 0.95);
+  border: 1px solid #2a4a3a;
+  border-radius: 16px;
+  padding: 40px;
+  width: 400px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  text-align: center;
+}
+
+.login-box h1 {
+  font-size: 36px;
+  margin-bottom: 8px;
+  color: #e8c547;
+  letter-spacing: 2px;
+}
+
+.subtitle {
+  color: #8aa89a;
+  margin-bottom: 30px;
+  font-size: 14px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 6px;
+  color: #b0c4b8;
+  font-size: 14px;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 12px 14px;
+  background: #0f1a14;
+  border: 1px solid #2a4a3a;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+  border-color: #e8c547;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #e8c547, #d4a017);
+  color: #1a1a1a;
+  border: none;
+  padding: 12px 30px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  width: 100%;
+  transition: transform 0.1s, box-shadow 0.2s;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(232, 197, 71, 0.3);
+}
+
+.tip {
+  margin-top: 20px;
+  font-size: 12px;
+  color: #6a7a72;
+  line-height: 1.6;
+}
+
+/* ===== 游戏界面 ===== */
+.game-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: #111820;
+  border-bottom: 1px solid #1f2a33;
+}
+
+.room-info { display: flex; align-items: center; gap: 10px; }
+.room-info .label { color: #8a9a92; }
+#room-id-display {
+  color: #e8c547;
+  font-weight: bold;
+  font-size: 18px;
+  letter-spacing: 1px;
+}
+
+.btn-small {
+  background: #2a3a44;
+  color: #c0d0c8;
+  border: 1px solid #3a4a54;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn-small:hover { background: #3a4a54; }
+
+.game-main {
+  display: flex;
+  flex: 1;
+  height: calc(100vh - 53px);
+}
+
+.table-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  min-width: 0;
+}
+
+#poker-table {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.table-felt {
+  position: relative;
+  width: 90%;
+  max-width: 900px;
+  aspect-ratio: 2 / 1;
+  background: radial-gradient(ellipse at center, #1e6b3a 0%, #0f4a22 70%, #083318 100%);
+  border-radius: 50%;
+  border: 12px solid #3a2418;
+  box-shadow: 0 0 40px rgba(0,0,0,0.6), inset 0 0 60px rgba(0,0,0,0.4);
+  overflow: visible;
+}
+
+.community-cards {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, calc(-100% - 10px));
+  display: flex;
+  gap: 6px;
+  z-index: 5;
+}
+
+.pot-display {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, 8px);
+  text-align: center;
+  z-index: 5;
+}
+.pot-label { font-size: 12px; color: #a8c8b0; }
+.pot-amount { font-size: 24px; font-weight: bold; color: #e8c547; }
+
+.stage-display {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.4);
+  padding: 4px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  color: #c0d8c8;
+  z-index: 5;
+}
+
+/* 玩家座位 */
+#player-seats { position: absolute; inset: 0; }
+
+.seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  width: 110px;
+  transition: filter 0.3s;
+}
+
+.seat.active-turn {
+  filter: drop-shadow(0 0 12px #e8c547);
+}
+
+.seat.folded { opacity: 0.4; }
+
+.seat .avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4a6a8a, #2a4a6a);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  border: 3px solid #2a3a4a;
+  position: relative;
+}
+
+.seat.is-self .avatar {
+  border-color: #e8c547;
+  box-shadow: 0 0 10px rgba(232,197,71,0.5);
+}
+
+.seat .name {
+  font-size: 12px;
+  margin-top: 3px;
+  color: #e0e8e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seat .chips {
+  font-size: 13px;
+  color: #e8c547;
+  font-weight: bold;
+}
+
+.seat .player-cards {
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+  margin-top: 3px;
+  min-height: 30px;
+}
+
+.seat .bet-indicator {
+  font-size: 11px;
+  color: #ffb84d;
+  margin-top: 2px;
+  min-height: 14px;
+}
+
+.seat .tag {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  font-size: 10px;
+  background: #e8c547;
+  color: #000;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: bold;
+}
+.seat .tag.sb { background: #6aaeff; }
+.seat .tag.bb { background: #ff6a6a; color: #fff; }
+.seat .tag.btn { background: #e8c547; }
+
+/* 扑克牌 */
+.card {
+  width: 38px;
+  height: 54px;
+  background: #fff;
+  border-radius: 5px;
+  border: 1px solid #999;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  user-select: none;
+}
+
+.card.red { color: #d32f2f; }
+.card.black { color: #1a1a1a; }
+
+.card .rank { font-size: 16px; line-height: 1; }
+.card .suit { font-size: 18px; line-height: 1; }
+
+.card.back {
+  background: repeating-linear-gradient(45deg, #2a4a8a, #2a4a8a 4px, #1a3a6a 4px, #1a3a6a 8px);
+  border-color: #1a2a4a;
+}
+.card.back .rank, .card.back .suit { display: none; }
+
+.community-cards .card {
+  width: 46px;
+  height: 66px;
+}
+.community-cards .card .rank { font-size: 20px; }
+.community-cards .card .suit { font-size: 22px; }
+
+/* ===== 操作区 ===== */
+.action-bar {
+  background: #111820;
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.action-info { flex: 1; min-width: 160px; }
+#turn-info { font-size: 15px; margin-bottom: 4px; color: #c0d8c8; }
+.bet-info { font-size: 13px; color: #8a9a92; display: flex; gap: 16px; }
+.bet-info b { color: #e8c547; }
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btn-action {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: transform 0.1s, opacity 0.2s;
+}
+.btn-action:hover:not(:disabled) { transform: translateY(-1px); }
+.btn-action:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-action.fold { background: #c0392b; }
+.btn-action.check { background: #7f8c8d; }
+.btn-action.call { background: #2980b9; }
+.btn-action.raise { background: #27ae60; }
+.btn-action.allin { background: #8e44ad; }
+
+.raise-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0a0e14;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+.raise-group input[type="range"] { width: 120px; }
+.raise-group input[type="number"] {
+  width: 70px;
+  padding: 6px;
+  background: #1a2028;
+  border: 1px solid #2a3a44;
+  border-radius: 5px;
+  color: #fff;
+  text-align: center;
+}
+
+.start-area { width: 100%; text-align: center; }
+#start-btn { width: auto; padding: 10px 40px; }
+
+/* ===== 侧边栏 ===== */
+.sidebar {
+  width: 280px;
+  background: #111820;
+  border-left: 1px solid #1f2a33;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-panel, .chat-panel {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-panel { flex: 1; border-bottom: 1px solid #1f2a33; min-height: 0; }
+.chat-panel { height: 40%; }
+
+.log-panel h3, .chat-panel h3 {
+  font-size: 14px;
+  color: #8a9a92;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #1f2a33;
+}
+
+#game-log {
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #b0c0b8;
+  flex: 1;
+}
+#game-log .log-entry { padding: 2px 0; border-bottom: 1px solid #1a2228; }
+
+#chat-messages {
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  flex: 1;
+  margin-bottom: 8px;
+}
+.chat-msg { margin-bottom: 4px; }
+.chat-msg .name { color: #e8c547; font-weight: bold; }
+.chat-msg.system { color: #6a8a7a; font-style: italic; }
+
+.chat-input { display: flex; gap: 6px; }
+.chat-input input {
+  flex: 1;
+  padding: 8px;
+  background: #0a0e14;
+  border: 1px solid #2a3a44;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+}
+.chat-input button {
+  padding: 8px 14px;
+  background: #2a4a3a;
+  border: none;
+  border-radius: 6px;
+  color: #c0d0c8;
+  cursor: pointer;
+}
+
+/* ===== 弹窗 ===== */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-content {
+  background: #152028;
+  border: 1px solid #2a4a3a;
+  border-radius: 16px;
+  padding: 30px;
+  min-width: 320px;
+  text-align: center;
+}
+
+.modal-content h2 { color: #e8c547; margin-bottom: 20px; }
+.result-item { margin-bottom: 14px; padding: 10px; background: #0f1a14; border-radius: 8px; }
+.result-item .winner-name { color: #e8c547; font-weight: bold; font-size: 16px; }
+.result-item .win-amount { color: #4caf50; font-size: 18px; }
+.result-item .hand-name { color: #a0c0b0; font-size: 13px; }
+.result-cards { margin-top: 6px; display: flex; justify-content: center; gap: 3px; }
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+#result-next { width: auto; padding: 11px 28px; }
+#result-close { padding: 10px 18px; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0a0e14; }
+::-webkit-scrollbar-thumb { background: #2a3a44; border-radius: 3px; }
+
+/* 响应式 */
+@media (max-width: 900px) {
+  .game-main { flex-direction: column; }
+  .sidebar { width: 100%; height: 200px; border-left: none; border-top: 1px solid #1f2a33; }
+  .sidebar { flex-direction: row; height: 180px; }
+  .log-panel, .chat-panel { flex: 1; height: 100%; border-bottom: none; border-right: 1px solid #1f2a33; }
+  .chat-input input { min-width: 0; }
+  .chat-input button { flex: 0 0 auto; }
+
+  /* 牌桌改为更接近正方形，给中间公共牌留出空间 */
+  .table-container { padding: 8px 4px; }
+  .table-felt {
+    width: 92%;
+    max-width: 420px;
+    aspect-ratio: 1 / 1;
+    border-width: 8px;
+  }
+
+  /* 座位整体缩小，避免压住中间的牌 */
+  .seat { width: 84px; }
+  .seat .avatar { width: 34px; height: 34px; font-size: 15px; border-width: 2px; }
+  .seat .name { font-size: 10px; margin-top: 2px; }
+  .seat .chips { font-size: 11px; }
+  .seat .player-cards { gap: 1px; margin-top: 2px; min-height: 22px; }
+  .seat .bet-indicator { font-size: 9px; min-height: 10px; margin-top: 1px; }
+  .seat .tag { font-size: 9px; padding: 0 4px; top: -4px; }
+  .seat .card { width: 24px; height: 34px; border-radius: 3px; }
+  .seat .card .rank { font-size: 10px; }
+  .seat .card .suit { font-size: 11px; }
+
+  /* 公共牌与底池 */
+  .community-cards { gap: 4px; }
+  .community-cards .card { width: 34px; height: 48px; }
+  .community-cards .card .rank { font-size: 14px; }
+  .community-cards .card .suit { font-size: 16px; }
+  .pot-label { font-size: 10px; }
+  .pot-amount { font-size: 18px; }
+  .stage-display { top: 6px; font-size: 11px; padding: 3px 10px; }
+
+  /* 操作区：开始按钮独占一行、更醒目 */
+  .action-bar { padding: 10px; gap: 10px; }
+  .action-info { min-width: 100%; }
+  .btn-action { padding: 9px 14px; font-size: 13px; }
+  .raise-group { flex: 1; }
+  .raise-group input[type="range"] { width: 100%; min-width: 60px; }
+  #start-btn { width: 100%; padding: 12px; font-size: 16px; }
+}
+
+@media (max-width: 380px) {
+  .community-cards .card { width: 30px; height: 42px; }
+  .community-cards .card .rank { font-size: 12px; }
+  .community-cards .card .suit { font-size: 13px; }
+  .seat { width: 76px; }
+}
