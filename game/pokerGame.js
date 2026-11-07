@@ -27,6 +27,7 @@ class PokerGame {
     this.currentPlayerIndex = 0;
     this.smallBlind = config.smallBlind || 10;
     this.bigBlind = config.bigBlind || 20;
+    this.ante = config.ante || 0; // 前注（PRD-05 §4.3）
     this.startingChips = config.startingChips || 1000;
     this.lastRaiserIndex = -1;
     this.winners = [];
@@ -192,13 +193,16 @@ class PokerGame {
     return player.token;
   }
 
-  removePlayer(id) {
+  // options.noWithdraw: 锦标赛淘汰时使用，筹码已归 0 不计入离桌筹码
+  removePlayer(id, options = {}) {
     const idx = this.players.findIndex(p => p.id === id);
     if (idx < 0) return;
 
     // 离桌玩家把剩余筹码带走，记入 withdrawnChips 以保证全局筹码守恒可核算
     const leaving = this.players[idx];
-    if (leaving.chips > 0) this.withdrawnChips += leaving.chips;
+    if (!options.noWithdraw && leaving.chips > 0) {
+      this.withdrawnChips += leaving.chips;
+    }
 
     this.players.splice(idx, 1);
     const n = this.players.length;
@@ -372,6 +376,20 @@ class PokerGame {
 
     const sb = this.players[sbIdx];
     const bb = this.players[bbIdx];
+
+    // 前注（PRD-05 §4.3）：每位有筹码玩家先扣 ante 进池，再下盲注。
+    // 必须走 placeBet 计入 totalBet（否则破坏 pot == Σ totalBet 不变量），
+    // 但**不**计入 currentBet（与真实规则一致）。
+    if (this.ante > 0) {
+      for (const idx of order) {
+        const p = this.players[idx];
+        const paid = this.placeBet(p, Math.min(this.ante, p.chips));
+        if (paid > 0) {
+          p.currentBet -= paid; // 前注不计入本轮跟注额
+        }
+      }
+      this.addLog(`前注 ${this.ante}×${order.length}`);
+    }
 
     this.placeBet(sb, Math.min(this.smallBlind, sb.chips));
     this.placeBet(bb, Math.min(this.bigBlind, bb.chips));

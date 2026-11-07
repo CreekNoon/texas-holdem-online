@@ -51,6 +51,37 @@
     </div>
   </div>
 
+  <!-- 锦标赛级别条（PRD-05 §5.3） -->
+  <div id="tournament-bar" class="tournament-bar hidden">
+    <div class="tb-item">
+      <span class="tb-label">Level</span>
+      <span class="tb-value" id="tb-level">1</span>
+    </div>
+    <div class="tb-item">
+      <span class="tb-label">盲注</span>
+      <span class="tb-value" id="tb-blinds">10/20</span>
+    </div>
+    <div class="tb-item" id="tb-ante-wrap">
+      <span class="tb-label">前注</span>
+      <span class="tb-value" id="tb-ante">0</span>
+    </div>
+    <div class="tb-item">
+      <span class="tb-label">下一级</span>
+      <span class="tb-value" id="tb-next">--:--</span>
+    </div>
+    <div class="tb-item">
+      <span class="tb-label">剩余</span>
+      <span class="tb-value" id="tb-alive">0</span>
+    </div>
+    <div class="tb-item">
+      <span class="tb-label">奖池</span>
+      <span class="tb-value" id="tb-prize">0</span>
+    </div>
+    <div class="tb-item tb-state">
+      <span class="tb-value" id="tb-state">报名中</span>
+    </div>
+  </div>
+
   <div class="game-main">
     <div class="table-container">
       <div id="poker-table">
@@ -74,6 +105,17 @@
         <div class="lobby-info" id="lobby-info">等待玩家加入…</div>
         <div class="lobby-actions">
           <button id="ready-btn" class="btn-primary">准备</button>
+        </div>
+      </div>
+
+      <!-- SNG 报名区（PRD-05 §5.3） -->
+      <div class="sng-bar hidden" id="sng-bar">
+        <div class="sng-info" id="sng-info">SNG 单桌锦标赛</div>
+        <div class="sng-actions">
+          <button id="sng-create-btn" class="btn-small">创建锦标赛</button>
+          <button id="sng-register-btn" class="btn-small">报名</button>
+          <button id="sng-start-btn" class="btn-primary">开始锦标赛</button>
+          <button id="sng-rematch-btn" class="btn-small hidden">再来一局</button>
         </div>
       </div>
 
@@ -132,6 +174,24 @@
         <h3>牌局日志</h3>
         <div id="game-log" aria-live="polite"></div>
       </div>
+
+      <!-- 锦标赛面板（PRD-05 §5.3） -->
+      <div class="tournament-panel hidden" id="tournament-panel">
+        <h3>锦标赛</h3>
+        <div class="tp-row">
+          <span class="tp-label">剩余人数</span>
+          <span class="tp-value" id="tp-alive">—</span>
+        </div>
+        <div class="tp-row">
+          <span class="tp-label">平均筹码</span>
+          <span class="tp-value" id="tp-avg">—</span>
+        </div>
+        <div class="tp-row">
+          <span class="tp-label">奖金池</span>
+          <span class="tp-value" id="tp-prize">—</span>
+        </div>
+        <div class="tp-standings" id="tp-standings"></div>
+      </div>
       <div class="chat-panel">
         <h3>聊天</h3>
         <div id="chat-messages" aria-live="polite"></div>
@@ -158,6 +218,19 @@
       <button id="result-next" class="btn-primary">开始下一局<span id="result-countdown"></span></button>
       <button id="result-share" class="btn-small">分享结果</button>
       <button id="result-close" class="btn-small">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 锦标赛结束页（PRD-05 §5.3） -->
+<div id="tournament-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tournament-title">
+  <div class="modal-content">
+    <h2 id="tournament-title">锦标赛结束</h2>
+    <div id="tournament-champion" class="tournament-champion"></div>
+    <div id="tournament-final" class="tournament-final"></div>
+    <div class="modal-actions">
+      <button id="tournament-rematch" class="btn-primary">再来一局</button>
+      <button id="tournament-close" class="btn-small">关闭</button>
     </div>
   </div>
 </div>

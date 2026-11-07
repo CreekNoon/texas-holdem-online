@@ -1013,3 +1013,184 @@ body.no-anim .modal:not(.hidden) .modal-content {
   .result-player { gap: 6px; padding: 8px; }
   .result-player .rp-name { min-width: 52px; font-size: 12px; }
 }
+
+/* ===================================================================
+   PRD-05：SNG 锦标赛 UI
+   =================================================================== */
+
+/* 级别条 */
+.tournament-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 8px 16px;
+  background: linear-gradient(90deg, rgba(30, 42, 36, 0.95), rgba(20, 32, 26, 0.95));
+  border-bottom: 1px solid #2f4a3c;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.tb-item {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.tb-label {
+  color: #8aa89a;
+  font-size: 11px;
+}
+
+.tb-value {
+  color: #e8c547;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.tb-state .tb-value {
+  color: #7dd3a0;
+}
+
+/* 报名区 */
+.sng-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  background: rgba(30, 26, 20, 0.9);
+  border: 1px solid #4a3f2f;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.sng-info {
+  font-size: 13px;
+  color: #d8c8a0;
+  flex: 1;
+  min-width: 160px;
+}
+
+.sng-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 侧边栏锦标赛面板 */
+.tournament-panel {
+  background: #1e2a24;
+  border: 1px solid #2f4a3c;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.tournament-panel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #e8c547;
+}
+
+.tp-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid #253830;
+}
+
+.tp-label { color: #8aa89a; }
+.tp-value { font-weight: 700; color: #e6f2ea; font-variant-numeric: tabular-nums; }
+
+.tp-standings {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.tp-standing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #253830;
+}
+
+.tp-standing:last-child { border-bottom: none; }
+.tp-standing.out { opacity: 0.5; }
+.tp-standing .tp-place { width: 22px; color: #8aa89a; font-variant-numeric: tabular-nums; }
+.tp-standing .tp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-standing .tp-chips { color: #7dd3a0; font-variant-numeric: tabular-nums; }
+.tp-standing .tp-payout { color: #e8c547; font-weight: 700; }
+.tp-standing.me .tp-name { color: #e8c547; font-weight: 700; }
+
+/* 冠军页 */
+.tournament-champion {
+  text-align: center;
+  padding: 16px 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: #e8c547;
+}
+
+.tournament-champion .champ-sub {
+  display: block;
+  font-size: 13px;
+  font-weight: 400;
+  color: #8aa89a;
+  margin-top: 6px;
+}
+
+.tournament-final {
+  margin-top: 8px;
+}
+
+.tf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #253830;
+  font-size: 13px;
+}
+
+.tf-row:last-child { border-bottom: none; }
+.tf-row.champ { color: #e8c547; font-weight: 700; }
+.tf-place { width: 30px; color: #8aa89a; }
+.tf-name { flex: 1; }
+.tf-payout { color: #7dd3a0; font-variant-numeric: tabular-nums; }
+
+/* 淘汰浮层（非阻塞） */
+.elimination-toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(60, 24, 24, 0.95);
+  border: 1px solid #a33;
+  color: #ffd7d7;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 150;
+  animation: elimIn 0.3s ease-out both;
+}
+
+@keyframes elimIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .elimination-toast { animation: none !important; }
+}
+
+body.no-anim .elimination-toast { animation: none !important; }
+
+@media (max-width: 900px) {
+  .tournament-bar { gap: 10px; padding: 6px 10px; font-size: 11px; }
+  .tb-label { font-size: 10px; }
+  .sng-actions { width: 100%; }
+  .sng-actions button { flex: 1; min-height: 44px; }
+}

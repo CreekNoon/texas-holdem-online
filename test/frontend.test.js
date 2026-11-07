@@ -177,6 +177,11 @@ class El {
   set scrollTop(v) { this._scrollTop = v; }
 }
 
+// 假定时器：记录但不真正调度
+const trackedIntervals = new Map();
+const trackedTimeouts = new Set();
+let fakeTimerId = 0;
+
 function buildSandbox() {
   const elements = new Map();
   const getEl = (id) => {
@@ -244,7 +249,15 @@ function buildSandbox() {
     history: { replaceState: () => {} },
     URL, URLSearchParams,
     alert: () => {},
-    setTimeout, clearTimeout, setInterval, clearInterval,
+    // 冒烟测试不需要真实计时：用假定时器，避免进程被 interval 挂住
+    setTimeout: (fn) => { trackedTimeouts.add(fn); return 0; },
+    clearTimeout: () => {},
+    setInterval: (fn) => {
+      const id = ++fakeTimerId;
+      trackedIntervals.set(id, fn);
+      return id;
+    },
+    clearInterval: (id) => { trackedIntervals.delete(id); },
     console,
     Math, Date, JSON, Object, Array, Set, Map, String, Number, Boolean,
     parseInt, parseFloat, isNaN,
@@ -253,7 +266,7 @@ function buildSandbox() {
   };
 
   const context = vm.createContext(sandbox);
-  return { context, handlers, emitted };
+  return { context, handlers, emitted, trackedIntervals };
 }
 
 test('4.1 client.js 在 DOM 桩下初始化无异常', () => {
@@ -368,4 +381,103 @@ test('4.1 观战者不会发起行动/开局请求', () => {
 
   const actions = emitted.filter(e => e.ev === 'action' || e.ev === 'start');
   assert.deepStrictEqual(actions, [], '观战者不应发起 action/start');
+});
+
+// ===== PRD-05：锦标赛 UI =====
+
+test('5.3 锦标赛报名/进行中/结束三种状态渲染无异常', () => {
+  const { context, handlers } = buildSandbox();
+  vm.runInContext(soundJs, context, { filename: 'sound.js' });
+  vm.runInContext(clientJs, context, { filename: 'client.js' });
+
+  const fire = (ev, payload) => { for (const fn of handlers[ev] || []) fn(payload); };
+  const base = {
+    roomId: 't', stage: 'waiting', community: [], pot: 0, currentBet: 0,
+    smallBlind: 10, bigBlind: 20, buttonIndex: 0, currentPlayerIndex: 0,
+    handCount: 1, sbIndex: 0, bbIndex: 1, result: null, winners: [],
+    hostId: 'p1', isHost: true, spectator: false, spectatorSeeAll: false,
+    spectatorCount: 0, requireReady: false, readyIds: [],
+    config: {}, turnDeadline: null, turnTimeMs: 30000,
+    players: [
+      { id: 'p1', name: 'Alice', chips: 1000, folded: false, allIn: false,
+        currentBet: 0, totalBet: 0, hasActed: false, disconnected: false,
+        isBot: false, ready: true, isSelf: true, hand: [], index: 0 },
+      { id: 'p2', name: 'Bob', chips: 1000, folded: false, allIn: false,
+        currentBet: 0, totalBet: 0, hasActed: false, disconnected: false,
+        isBot: false, ready: true, isSelf: false, hand: [], index: 1 }
+    ],
+    myTurn: false, minRaiseTo: 40, callAmount: 0, log: []
+  };
+
+  const tournamentBase = {
+    state: 'registering', buyIn: 100, startingChips: 1000, maxPlayers: 7,
+    prizePool: 0, level: 1, sb: 10, bb: 20, ante: 0,
+    levelEndsAt: null, pendingLevel: false, nextLevel: { sb: 15, bb: 30, ante: 0 },
+    entrants: [
+      { playerId: 'p1', name: 'Alice', place: null, payout: 0, eliminated: false, chips: 1000 },
+      { playerId: 'p2', name: 'Bob', place: null, payout: 0, eliminated: false, chips: 1000 }
+    ],
+    payoutStructure: [{ place: 1, percent: 50 }, { place: 2, percent: 30 }, { place: 3, percent: 20 }],
+    playerCount: 2, aliveCount: 2, handCount: 0, startedAt: null, finishedAt: null
+  };
+
+  fire('joined', { playerId: 'p1', roomId: 't', token: 'k' });
+
+  // 报名中
+  assert.doesNotThrow(() => fire('state', {
+    ...base, tournament: tournamentBase
+  }), '报名中渲染失败');
+
+  // 进行中
+  assert.doesNotThrow(() => fire('state', {
+    ...base,
+    stage: 'preflop',
+    tournament: {
+      ...tournamentBase,
+      state: 'running',
+      prizePool: 200,
+      levelEndsAt: Date.now() + 300000,
+      startedAt: Date.now() - 1000
+    }
+  }), '进行中渲染失败');
+
+  // 结束
+  assert.doesNotThrow(() => fire('state', {
+    ...base,
+    stage: 'ended',
+    tournament: {
+      ...tournamentBase,
+      state: 'finished',
+      prizePool: 200,
+      aliveCount: 1,
+      startedAt: Date.now() - 60000,
+      finishedAt: Date.now(),
+      entrants: [
+        { playerId: 'p1', name: 'Alice', place: 1, payout: 130, eliminated: false, chips: 2000 },
+        { playerId: 'p2', name: 'Bob', place: 2, payout: 70, eliminated: true, chips: 0 }
+      ]
+    }
+  }), '结束渲染失败');
+});
+
+test('5.3 锦标赛淘汰事件不抛异常', () => {
+  const { context, handlers } = buildSandbox();
+  vm.runInContext(soundJs, context, { filename: 'sound.js' });
+  vm.runInContext(clientJs, context, { filename: 'client.js' });
+
+  const fire = (ev, payload) => { for (const fn of handlers[ev] || []) fn(payload); };
+  assert.doesNotThrow(() => fire('tournament:eliminated', { name: 'Bob', place: 2 }));
+  assert.doesNotThrow(() => fire('tournament:level', { level: 2, sb: 15, bb: 30, ante: 0 }));
+});
+
+test('5.3 锦标赛快照不泄露底牌', () => {
+  // 服务端 contract：tournament 对象里不应有 hand/holeCards 字段
+  const { Tournament } = require('../game/tournament');
+  const t = new Tournament({ buyIn: 100 });
+  t.register('p1', 'A');
+  t.register('p2', 'B');
+  t.start();
+  const json = JSON.stringify(t.toPublicState());
+  assert.ok(!json.includes('"hand"'));
+  assert.ok(!json.includes('"holeCards"'));
 });

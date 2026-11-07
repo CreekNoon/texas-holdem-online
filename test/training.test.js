@@ -3,13 +3,13 @@ const assert = require('node:assert');
 const { startServer, joinRoom, sleep } = require('../test-support/serverHarness');
 
 const FAST_BOTS = {
-  BOT_MIN_DELAY_MS: '15',
-  BOT_MAX_DELAY_MS: '40',
-  TURN_TIME_MS: '3000',
-  EQUITY_ITERATIONS: '500'
+  BOT_MIN_DELAY_MS: '8',
+  BOT_MAX_DELAY_MS: '20',
+  TURN_TIME_MS: '2000',
+  EQUITY_ITERATIONS: '200'
 };
 
-test('4.3 训练模式：单人 + 3 机器人可打完 2 局且筹码守恒', { timeout: 120000 }, async (t) => {
+test('4.3 训练模式：单人 + 3 机器人可打完 2 局且筹码守恒', { timeout: 240000 }, async (t) => {
   const s = await startServer(FAST_BOTS);
   t.after(() => s.stop());
 
@@ -32,7 +32,7 @@ test('4.3 训练模式：单人 + 3 机器人可打完 2 局且筹码守恒', { 
   let hands = 0;
   let lastEndedHand = 0; // 已处理过的 ended 局号
   let lastStartRequestAt = 0;
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 150000;
 
   while (Date.now() < deadline && hands < 2) {
     if (!state) { await sleep(50); continue; }

@@ -655,6 +655,9 @@ function render(state) {
   // 大厅 / 准备区（PRD-04 §3.2）
   renderLobby(state);
 
+  // 锦标赛 UI（PRD-05）
+  renderTournament(state);
+
   // 操作区
   renderActions(state);
 
@@ -692,7 +695,242 @@ function render(state) {
   }
 }
 
-// ===== 大厅渲染 =====
+// ===== SNG 锦标赛 UI（PRD-05 §5.3）=====
+const tournamentBar = document.getElementById('tournament-bar');
+const tbLevel = document.getElementById('tb-level');
+const tbBlinds = document.getElementById('tb-blinds');
+const tbAnte = document.getElementById('tb-ante');
+const tbAnteWrap = document.getElementById('tb-ante-wrap');
+const tbNext = document.getElementById('tb-next');
+const tbAlive = document.getElementById('tb-alive');
+const tbPrize = document.getElementById('tb-prize');
+const tbState = document.getElementById('tb-state');
+
+const sngBar = document.getElementById('sng-bar');
+const sngInfo = document.getElementById('sng-info');
+const sngCreateBtn = document.getElementById('sng-create-btn');
+const sngRegisterBtn = document.getElementById('sng-register-btn');
+const sngStartBtn = document.getElementById('sng-start-btn');
+const sngRematchBtn = document.getElementById('sng-rematch-btn');
+
+const tournamentPanel = document.getElementById('tournament-panel');
+const tpAlive = document.getElementById('tp-alive');
+const tpAvg = document.getElementById('tp-avg');
+const tpPrize = document.getElementById('tp-prize');
+const tpStandings = document.getElementById('tp-standings');
+
+const tournamentModal = document.getElementById('tournament-modal');
+const tournamentChampion = document.getElementById('tournament-champion');
+const tournamentFinal = document.getElementById('tournament-final');
+const tournamentRematch = document.getElementById('tournament-rematch');
+const tournamentClose = document.getElementById('tournament-close');
+
+let levelCountdownTimer = null;
+let shownTournamentFinish = null;
+
+function fmtClock(ms) {
+  if (ms <= 0) return '00:00';
+  const total = Math.ceil(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function renderTournament(state) {
+  const t = state.tournament;
+
+  // 级别条
+  if (!t) {
+    tournamentBar.classList.add('hidden');
+    sngBar.classList.add('hidden');
+    tournamentPanel.classList.add('hidden');
+    tournamentModal.classList.add('hidden');
+    stopLevelCountdown();
+    return;
+  }
+
+  tournamentBar.classList.remove('hidden');
+  tbLevel.textContent = t.level;
+  tbBlinds.textContent = `${t.sb}/${t.bb}`;
+  tbAnte.textContent = t.ante;
+  tbAnteWrap.classList.toggle('hidden', !t.ante);
+  tbAlive.textContent = `${t.aliveCount}/${t.playerCount}`;
+  tbPrize.textContent = t.prizePool;
+
+  const stateNames = { registering: '报名中', running: '进行中', finished: '已结束' };
+  tbState.textContent = stateNames[t.state] || t.state;
+
+  // 下一级倒计时
+  startLevelCountdown(t);
+
+  // 侧边栏面板
+  tournamentPanel.classList.remove('hidden');
+  tpAlive.textContent = `${t.aliveCount} / ${t.playerCount}`;
+  const aliveEntrants = t.entrants.filter(e => !e.eliminated);
+  const avg = aliveEntrants.length > 0
+    ? Math.round(aliveEntrants.reduce((a, e) => a + (e.chips || 0), 0) / aliveEntrants.length)
+    : 0;
+  tpAvg.textContent = avg;
+  tpPrize.textContent = t.prizePool;
+
+  tpStandings.innerHTML = '';
+  for (const e of t.entrants) {
+    const row = document.createElement('div');
+    row.className = 'tp-standing' + (e.eliminated ? ' out' : '');
+    const me = state.players.find(p => p.id === e.playerId && p.isSelf);
+    if (me) row.classList.add('me');
+
+    const place = e.place ? `#${e.place}` : '-';
+    const chips = e.eliminated ? '淘汰' : (e.chips || 0);
+    const payout = e.payout > 0 ? `+${e.payout}` : '';
+
+    row.innerHTML = `
+      <span class="tp-place">${place}</span>
+      <span class="tp-name">${escapeHtml(e.name)}</span>
+      <span class="tp-chips">${chips}</span>
+      <span class="tp-payout">${payout}</span>
+    `;
+    tpStandings.appendChild(row);
+  }
+
+  // 报名区
+  renderSngBar(state, t);
+
+  // 结束页
+  renderTournamentFinish(state, t);
+}
+
+function renderSngBar(state, t) {
+  if (state.spectator) {
+    sngBar.classList.add('hidden');
+    return;
+  }
+  sngBar.classList.remove('hidden');
+
+  const isHost = !!state.isHost;
+  const registered = t.entrants.some(e => {
+    const p = state.players.find(x => x.id === e.playerId && x.isSelf);
+    return !!p;
+  });
+
+  if (t.state === 'registering') {
+    sngInfo.textContent = `报名中 · 买入 ${t.buyIn} · 起始 ${t.startingChips} · `
+      + `已报名 ${t.playerCount}/${t.maxPlayers || 7} · 奖池 ${t.prizePool || 0}`;
+    sngCreateBtn.classList.add('hidden');
+    sngStartBtn.classList.toggle('hidden', !isHost);
+    sngStartBtn.disabled = t.playerCount < 2;
+    sngRegisterBtn.classList.remove('hidden');
+    sngRegisterBtn.textContent = registered ? '取消报名' : '报名';
+    sngRematchBtn.classList.add('hidden');
+  } else if (t.state === 'running') {
+    sngInfo.textContent = `进行中 · Level ${t.level} · ${t.sb}/${t.bb}`
+      + (t.ante ? ` (前注 ${t.ante})` : '')
+      + ` · 剩余 ${t.aliveCount}/${t.playerCount}`;
+    sngCreateBtn.classList.add('hidden');
+    sngRegisterBtn.classList.add('hidden');
+    sngStartBtn.classList.add('hidden');
+    sngRematchBtn.classList.add('hidden');
+  } else {
+    sngInfo.textContent = `已结束 · 奖池 ${t.prizePool} · 冠军 `
+      + (t.entrants.find(e => e.place === 1) || {}).name;
+    sngCreateBtn.classList.add('hidden');
+    sngRegisterBtn.classList.add('hidden');
+    sngStartBtn.classList.add('hidden');
+    sngRematchBtn.classList.toggle('hidden', !isHost);
+  }
+}
+
+function startLevelCountdown(t) {
+  stopLevelCountdown();
+  if (t.state !== 'running' || !t.levelEndsAt) {
+    tbNext.textContent = t.state === 'running' ? '最后一级' : '--:--';
+    return;
+  }
+  const tick = () => {
+    const left = t.levelEndsAt - Date.now();
+    tbNext.textContent = left > 0 ? fmtClock(left) : '升级中…';
+    if (left <= 0) stopLevelCountdown();
+  };
+  tick();
+  levelCountdownTimer = setInterval(tick, 500);
+}
+
+function stopLevelCountdown() {
+  if (levelCountdownTimer) {
+    clearInterval(levelCountdownTimer);
+    levelCountdownTimer = null;
+  }
+}
+
+function renderTournamentFinish(state, t) {
+  if (t.state !== 'finished') {
+    tournamentModal.classList.add('hidden');
+    shownTournamentFinish = null;
+    return;
+  }
+  // 同一届只弹一次
+  const key = `${t.startedAt}-${t.finishedAt}`;
+  if (shownTournamentFinish === key) return;
+  shownTournamentFinish = key;
+
+  const champ = t.entrants.find(e => e.place === 1);
+  const isMe = champ && state.players.some(p => p.id === champ.playerId && p.isSelf);
+
+  tournamentChampion.innerHTML = isMe
+    ? `🏆 你赢了！<span class="champ-sub">第 1 名 · 奖金 ${champ.payout}</span>`
+    : `🏆 ${escapeHtml((champ && champ.name) || '—')}<span class="champ-sub">第 1 名 · 奖金 ${(champ && champ.payout) || 0}</span>`;
+
+  tournamentFinal.innerHTML = '';
+  for (const e of t.entrants.slice().sort((a, b) => (a.place || 99) - (b.place || 99))) {
+    const row = document.createElement('div');
+    row.className = 'tf-row' + (e.place === 1 ? ' champ' : '');
+    row.innerHTML = `
+      <span class="tf-place">#${e.place || '-'}</span>
+      <span class="tf-name">${escapeHtml(e.name)}</span>
+      <span class="tf-payout">${e.payout > 0 ? '+' + e.payout : ''}</span>
+    `;
+    tournamentFinal.appendChild(row);
+  }
+
+  tournamentModal.classList.remove('hidden');
+  if (isMe) Sound.win();
+}
+
+// 按钮事件
+sngCreateBtn.addEventListener('click', () => {
+  socket.emit('tournament:create', { buyIn: 100, startingChips: 1000 });
+});
+sngRegisterBtn.addEventListener('click', () => {
+  const t = currentState && currentState.tournament;
+  if (!t) return;
+  const me = currentState.players.find(p => p.isSelf);
+  const registered = me && t.entrants.some(e => e.playerId === me.id);
+  socket.emit('tournament:register', { join: !registered });
+});
+sngStartBtn.addEventListener('click', () => socket.emit('tournament:start'));
+sngRematchBtn.addEventListener('click', () => socket.emit('tournament:rematch'));
+tournamentRematch.addEventListener('click', () => {
+  tournamentModal.classList.add('hidden');
+  socket.emit('tournament:rematch');
+});
+tournamentClose.addEventListener('click', () => tournamentModal.classList.add('hidden'));
+
+// 淘汰浮层
+socket.on('tournament:eliminated', (e) => {
+  if (!e) return;
+  const el = document.createElement('div');
+  el.className = 'elimination-toast';
+  el.textContent = `${e.name} 被淘汰 · 第 ${e.place} 名`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+});
+
+socket.on('tournament:level', () => {
+  // 状态会随 broadcastState 一起刷新，这里只做提示
+  showToast('盲注升级', 1400);
+});
+
+// 大厅渲染
 function renderLobby(state) {
   const isLobby = state.stage === 'waiting' || state.stage === 'ended';
   if (!isLobby || state.spectator) {

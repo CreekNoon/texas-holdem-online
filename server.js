@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const PokerGame = require('./game/pokerGame');
 const { BotScheduler } = require('./game/botScheduler');
 const { equity } = require('./game/equity');
+const { Tournament } = require('./game/tournament');
 
 const app = express();
 const server = http.createServer(app);
@@ -65,7 +66,10 @@ function getRoom(roomId) {
         // 默认不强制准备，避免破坏既有"点开始就开局"的用法；
         // 房主可在大厅显式开启（PRD-04 §3.2）
         requireReady: false
-      }
+      },
+      // SNG 锦标赛（PRD-05）：cash 模式下为 null
+      tournament: null,
+      levelTimer: null
     };
     room.botScheduler = new BotScheduler(game, {
       minDelay: BOT_MIN_DELAY_MS,
@@ -74,6 +78,10 @@ function getRoom(roomId) {
         // 机器人行动后继续走统一状态变更流程（会再次 tick，调度下一个 bot）
         touch(room);
         afterStateChange(room);
+        // SNG：机器人行动也可能结束本手
+        if (room.tournament && room.tournament.state === 'running' && room.game.stage === 'ended') {
+          onTournamentHandEnded(room);
+        }
       }
     });
     rooms.set(roomId, room);
@@ -127,12 +135,145 @@ function buildRoomState(room, selfId, isSpectator = false) {
     botCount: room.config.botCount,
     botDifficulty: room.config.botDifficulty
   };
+
+  // SNG 锦标赛快照（PRD-05 §5.1）
+  state.tournament = room.tournament ? room.tournament.toPublicState() : null;
+
   return state;
 }
 
+// ===== SNG 锦标赛辅助（PRD-05）=====
+
+const LEVEL_TIMER_MS = Number(process.env.LEVEL_TIMER_MS) || 0; // 0 = 用 blindSchedule 的 durationMs
+
+function clearLevelTimer(room) {
+  if (room.levelTimer) {
+    clearTimeout(room.levelTimer);
+    room.levelTimer = null;
+  }
+}
+
+// 把锦标赛当前盲注/前注应用到 PokerGame
+function applyTournamentBlinds(room) {
+  const t = room.tournament;
+  if (!t) return;
+  const { sb, bb, ante } = t.blinds;
+  room.game.smallBlind = sb;
+  room.game.bigBlind = bb;
+  room.game.ante = ante;
+}
+
+// 安排下一次盲注升级（§4.2）
+function armLevelTimer(room) {
+  clearLevelTimer(room);
+  const t = room.tournament;
+  if (!t || t.state !== 'running') return;
+  if (t.levelEndsAt === null) return;
+  if (t.levelIndex >= t.blindSchedule.length - 1) return;
+
+  const delay = Math.max(0, t.levelEndsAt - Date.now());
+  room.levelTimer = setTimeout(() => {
+    room.levelTimer = null;
+    if (!room.tournament || room.tournament.state !== 'running') return;
+
+    const inProgress = room.game.isHandInProgress();
+    const change = room.tournament.tickLevel(Date.now(), inProgress);
+
+    if (change && !change.pending) {
+      applyTournamentBlinds(room);
+      io.to(room.tournament.id ? findRoomId(room) : '').emit('tournament:level', {
+        ...room.tournament.toPublicState(),
+        level: change.level
+      });
+      armLevelTimer(room);
+      afterStateChange(room);
+    } else if (change && change.pending) {
+      // 本手结束后由 onHandEnded 应用
+      broadcastState(room);
+    }
+  }, delay);
+
+  if (room.levelTimer.unref) room.levelTimer.unref();
+}
+
+function findRoomId(room) {
+  for (const [id, r] of rooms) if (r === room) return id;
+  return '';
+}
+
+// 开始一手锦标赛牌局
+function startTournamentHand(room) {
+  const t = room.tournament;
+  if (!t || t.state !== 'running') return false;
+
+  // 淘汰者不参与下一手
+  for (const e of t.entrants) {
+    if (e.eliminated) {
+      const p = room.game.players.find(x => x.id === e.playerId);
+      // 锦标赛淘汰：筹码已归 0，不应计入 withdrawnChips
+      if (p) room.game.removePlayer(p.id, { noWithdraw: true });
+    }
+  }
+
+  applyTournamentBlinds(room);
+  t.beginHand(room.game.players);
+
+  const ok = room.game.startHand();
+  if (!ok) return false;
+
+  armLevelTimer(room);
+  return true;
+}
+
+// 每手结束后的锦标赛处理：淘汰 → 名次 → 升级 → 下一手或结束
+function onTournamentHandEnded(room) {
+  const t = room.tournament;
+  if (!t || t.state !== 'running') return;
+
+  t.syncChips(room.game.players);
+  const result = t.onHandFinished(Date.now());
+
+  const roomId = findRoomId(room);
+
+  // 广播淘汰
+  for (const e of (result && result.eliminated) || []) {
+    io.to(roomId).emit('tournament:eliminated', e);
+    room.game.addLog(`${e.name} 被淘汰，第 ${e.place} 名`);
+  }
+
+  // 升级（若挂起）
+  if (result && result.levelChange) {
+    applyTournamentBlinds(room);
+    io.to(roomId).emit('tournament:level', {
+      ...t.toPublicState(),
+      level: result.levelChange.level
+    });
+    armLevelTimer(room);
+  }
+
+  if (t.state === 'finished') {
+    clearLevelTimer(room);
+    // 锦标赛结束后也要清掉淘汰者座位，避免残留在最终状态里
+    for (const e of t.entrants) {
+      if (e.eliminated) {
+        const p = room.game.players.find(x => x.id === e.playerId);
+        if (p) room.game.removePlayer(p.id, { noWithdraw: true });
+      }
+    }
+    io.to(roomId).emit('tournament:finished', t.toPublicState());
+    broadcastState(room);
+    return;
+  }
+
+  // 自动开下一手
+  if (t.aliveEntrants().length >= 2) {
+    startTournamentHand(room);
+  }
+  broadcastState(room);
+}
+
 // 统一包装 socket handler：任何异常都不能打崩进程
-function safeHandler(socket, fn) {
-  return (payload) => {
+function safeHandler(socket, fn) {  return (payload) => {
     try {
       fn(payload);
     } catch (err) {
@@ -204,6 +345,10 @@ function onTurnTimeout(room, playerId) {
 
   touch(room);
   afterStateChange(room);
+  // SNG：超时行动也可能结束本手
+  if (room.tournament && room.tournament.state === 'running' && game.stage === 'ended') {
+    onTournamentHandEnded(room);
+  }
 }
 
 // ===== 断线宽限期（PRD-02 §3.3）=====
@@ -387,6 +532,12 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // SNG 模式下由锦标赛自动控制牌局，不允许手动开始（PRD-05）
+    if (room.tournament) {
+      socket.emit('error', '锦标赛模式由系统自动开局');
+      return;
+    }
+
     // 房主校验（PRD-04 §3.2）
     if (room.hostId && room.hostId !== socket.data.playerId) {
       socket.emit('error', '等待房主开始');
@@ -465,6 +616,159 @@ io.on('connection', (socket) => {
     broadcastState(room);
   }));
 
+  // ===== SNG 锦标赛（PRD-05）=====
+
+  // 创建 / 配置锦标赛（报名阶段）
+  socket.on('tournament:create', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    if (socket.data.spectating) return;
+    if (room.hostId !== socket.data.playerId) {
+      socket.emit('error', '只有房主可以创建锦标赛');
+      return;
+    }
+    if (room.tournament && room.tournament.state !== 'finished') {
+      socket.emit('error', '锦标赛已在进行中');
+      return;
+    }
+    if (room.game.isHandInProgress()) {
+      socket.emit('error', '牌局进行中无法创建锦标赛');
+      return;
+    }
+
+    const { buyIn, startingChips, maxPlayers, name } = payload;
+    if (buyIn !== undefined && (!Number.isInteger(buyIn) || buyIn < 1)) {
+      socket.emit('error', '买入必须为正整数');
+      return;
+    }
+    if (startingChips !== undefined && (!Number.isInteger(startingChips) || startingChips < 20)) {
+      socket.emit('error', '起始筹码必须 ≥ 20');
+      return;
+    }
+    if (maxPlayers !== undefined && (!Number.isInteger(maxPlayers) || maxPlayers < 2 || maxPlayers > 7)) {
+      socket.emit('error', '人数上限必须是 2–7');
+      return;
+    }
+
+    room.config.mode = 'sng';
+    room.tournament = new Tournament({
+      id: `${socket.data.roomId}-${Date.now()}`,
+      name: typeof name === 'string' ? name.slice(0, 20) : 'SNG 单桌赛',
+      buyIn,
+      startingChips,
+      maxPlayers,
+      // 测试注入：LEVEL_DURATION_MS 覆盖默认 5 分钟
+      levelDurationMs: LEVEL_TIMER_MS || undefined
+    });
+
+    // 已在房间的玩家自动报名
+    for (const p of room.game.players) {
+      room.tournament.register(p.id, p.name);
+    }
+
+    touch(room);
+    io.to(socket.data.roomId).emit('tournament:created', room.tournament.toPublicState());
+    broadcastState(room);
+  }));
+
+  // 报名 / 取消报名
+  socket.on('tournament:register', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room || !room.tournament) return;
+    if (socket.data.spectating) return;
+
+    const t = room.tournament;
+    const player = room.game.players.find(p => p.id === socket.data.playerId);
+    if (!player) return;
+
+    const wantJoin = payload && typeof payload.join === 'boolean' ? payload.join : true;
+    if (wantJoin) {
+      if (!t.register(player.id, player.name)) {
+        socket.emit('error', '无法报名（可能已满员或已开赛）');
+        return;
+      }
+    } else {
+      if (!t.unregister(player.id)) {
+        socket.emit('error', '无法取消报名（可能已开赛）');
+        return;
+      }
+    }
+    touch(room);
+    broadcastState(room);
+  }));
+
+  // 开始锦标赛
+  socket.on('tournament:start', safeHandler(socket, () => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room || !room.tournament) {
+      socket.emit('error', '尚未创建锦标赛');
+      return;
+    }
+    if (socket.data.spectating) {
+      socket.emit('error', '观战者不能开始锦标赛');
+      return;
+    }
+    if (room.hostId !== socket.data.playerId) {
+      socket.emit('error', '只有房主可以开始锦标赛');
+      return;
+    }
+
+    const t = room.tournament;
+    if (!t.start()) {
+      socket.emit('error', '至少需要 2 名选手才能开始');
+      return;
+    }
+
+    // 应用起始筹码与盲注
+    room.game.resetChips(t.startingChips);
+    applyTournamentBlinds(room);
+
+    // 只保留报名选手
+    for (const p of [...room.game.players]) {
+      if (!t.entrants.some(e => e.playerId === p.id)) {
+        room.game.removePlayer(p.id);
+      }
+    }
+
+    room.game.stage = 'ended'; // 允许 startHand
+    startTournamentHand(room);
+
+    io.to(socket.data.roomId).emit('tournament:started', t.toPublicState());
+    touch(room);
+    afterStateChange(room);
+  }));
+
+  // 再来一局：按同配置重建
+  socket.on('tournament:rematch', safeHandler(socket, () => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room || !room.tournament) return;
+    if (room.hostId !== socket.data.playerId) {
+      socket.emit('error', '只有房主可以重开');
+      return;
+    }
+    const old = room.tournament;
+    if (old.state !== 'finished') {
+      socket.emit('error', '锦标赛尚未结束');
+      return;
+    }
+
+    clearLevelTimer(room);
+    room.tournament = new Tournament({
+      id: `${socket.data.roomId}-${Date.now()}`,
+      name: old.name,
+      buyIn: old.buyIn,
+      startingChips: old.startingChips,
+      maxPlayers: old.maxPlayers
+    });
+    for (const p of room.game.players) {
+      room.tournament.register(p.id, p.name);
+    }
+
+    touch(room);
+    io.to(socket.data.roomId).emit('tournament:created', room.tournament.toPublicState());
+    broadcastState(room);
+  }));
+
   socket.on('action', safeHandler(socket, (payload) => {
     if (!payload || typeof payload !== 'object') {
       socket.emit('error', '参数错误');
@@ -480,6 +784,10 @@ io.on('connection', (socket) => {
       touch(room);
       clearTurnTimer(room);
       afterStateChange(room);
+      // SNG：每手结束后处理淘汰/升级/自动开下一手
+      if (room.tournament && room.tournament.state === 'running' && room.game.stage === 'ended') {
+        onTournamentHandEnded(room);
+      }
     } else {
       socket.emit('error', '无效操作');
     }
@@ -778,6 +1086,7 @@ setInterval(() => {
     const noSockets = room.playerIds.size === 0;
     if (noSockets && now - room.lastActivityAt > IDLE_ROOM_MS) {
       clearTurnTimer(room);
+      clearLevelTimer(room);
       if (room.botScheduler) room.botScheduler.stop();
       for (const t of room.graceTimers.values()) clearTimeout(t);
       room.graceTimers.clear();
@@ -790,6 +1099,7 @@ setInterval(() => {
 function shutdown() {
   for (const room of rooms.values()) {
     clearTurnTimer(room);
+    clearLevelTimer(room);
     if (room.botScheduler) room.botScheduler.stop();
     for (const t of room.graceTimers.values()) clearTimeout(t);
     room.graceTimers.clear();
