@@ -28,6 +28,9 @@
 
 <!-- 游戏界面 -->
 <div id="game-screen" class="screen hidden">
+  <!-- 连接状态横幅（PRD-02） -->
+  <div id="conn-banner" class="conn-banner hidden"></div>
+
   <div class="game-header">
     <div class="room-info">
       <span class="label">房间:</span>
@@ -61,6 +64,7 @@
       <div class="action-bar" id="action-bar">
         <div class="action-info">
           <div id="turn-info">等待其他玩家...</div>
+          <div id="turn-countdown" class="turn-countdown hidden"></div>
           <div class="bet-info">
             <span>跟注: <b id="call-amount">0</b></span>
             <span>加注到: <b id="min-raise">0</b></span>

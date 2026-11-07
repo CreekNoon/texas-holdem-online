@@ -1,13 +1,22 @@
 const { Deck } = require('./deck');
 const { evaluateBest, compareHands } = require('./handEvaluator');
+const crypto = require('node:crypto');
 
 const VALID_ACTIONS = new Set(['fold', 'check', 'call', 'raise', 'allin']);
 const MAX_PLAYERS = 7;
 
+function newPlayerId() {
+  return 'p_' + crypto.randomUUID();
+}
+
+function newToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
 class PokerGame {
   constructor(roomId, config = {}) {
     this.roomId = roomId;
-    this.players = []; // {id, name, socket, chips, hand, folded, allIn, currentBet, totalBet, hasActed, isBot, disconnected}
+    this.players = []; // {id, name, socketId, token, chips, hand, folded, allIn, currentBet, totalBet, hasActed, isBot, disconnected}
     this.deck = null;
     this.community = [];
     this.pot = 0;
@@ -28,10 +37,30 @@ class PokerGame {
     this.bbIndex = -1;
     this.log = [];
     this.handCount = 0;
+
+    // 回合超时（PRD-02）
+    this.turnTimeMs = config.turnTimeMs || 30000;
+    this.turnDeadline = null;
+    this.turnSeq = 0; // 每次行动者/阶段变化 +1，网络层据此判断是否重置计时器
   }
 
   isHandInProgress() {
     return this.stage !== 'waiting' && this.stage !== 'ended';
+  }
+
+  // 标记行动者/阶段发生变化，供网络层重置回合计时器（PRD-02 §4.1）
+  bumpTurnSeq() {
+    this.turnSeq++;
+    return this.turnSeq;
+  }
+
+  // 当前是否轮到某个玩家行动（且阶段需要计时）
+  isTurnActive() {
+    if (!['preflop', 'flop', 'turn', 'river'].includes(this.stage)) return false;
+    const cur = this.players[this.currentPlayerIndex];
+    if (!cur) return false;
+    if (cur.folded || cur.allIn || cur.disconnected || cur.isBot) return false;
+    return true;
   }
 
   addPlayer(id, name, socket) {
@@ -48,7 +77,9 @@ class PokerGame {
     }
 
     const player = {
-      id, name, socket,
+      id, name,
+      socketId: socket && socket.id ? socket.id : null,
+      token: newToken(),
       chips: this.startingChips,
       hand: [],
       folded: false,
@@ -58,10 +89,42 @@ class PokerGame {
       hasActed: false,
       chipsAtHandStart: this.startingChips,
       isBot: false,
-      disconnected: false
+      disconnected: false,
+      disconnectedAt: null
     };
     this.players.push(player);
     return player;
+  }
+
+  // 绑定/解绑 socket（PRD-02 §3.3）
+  setPlayerConnection(id, socketId, connected) {
+    const player = this.players.find(p => p.id === id);
+    if (!player) return null;
+    player.socketId = connected ? socketId : null;
+    player.disconnected = !connected;
+    player.disconnectedAt = connected ? null : Date.now();
+    this.bumpTurnSeq();
+    return player;
+  }
+
+  // 按 token 查找玩家（重连校验）
+  findPlayerByToken(id, token) {
+    const player = this.players.find(p => p.id === id);
+    if (!player || !token) return null;
+    // 定长比较，避免时序侧信道
+    const a = Buffer.from(String(player.token));
+    const b = Buffer.from(String(token));
+    if (a.length !== b.length) return null;
+    if (!crypto.timingSafeEqual(a, b)) return null;
+    return player;
+  }
+
+  // 重连成功后轮换 token，旧 token 立即失效（PRD-02 §9）
+  rotateToken(id) {
+    const player = this.players.find(p => p.id === id);
+    if (!player) return null;
+    player.token = newToken();
+    return player.token;
   }
 
   removePlayer(id) {
@@ -92,6 +155,8 @@ class PokerGame {
   }
 
   // 断线：标记弃牌但保留座位到本局结束（PRD-01 §3.5）
+  // 注意：PRD-02 引入宽限期后，disconnect 走 markDisconnected()，不走这里；
+  // 显式 leave 仍走 markFolded() 立即弃牌。
   markFolded(id) {
     const player = this.players.find(p => p.id === id);
     if (!player) return false;
@@ -109,6 +174,38 @@ class PokerGame {
     const current = this.players[this.currentPlayerIndex];
     if (wasActive && this.isHandInProgress() && current && current.id === id) {
       this.checkRoundEnd();
+    }
+    return true;
+  }
+
+  // 断线（PRD-02）：只标记 disconnected，保留座位与手牌，不立即弃牌
+  markDisconnected(id) {
+    const player = this.players.find(p => p.id === id);
+    if (!player) return false;
+    player.disconnected = true;
+    player.disconnectedAt = Date.now();
+    player.socketId = null;
+    this.bumpTurnSeq();
+    return true;
+  }
+
+  // 宽限期到期：此时才真正弃牌（PRD-02 §3.3）
+  foldDisconnectedPlayer(id) {
+    const player = this.players.find(p => p.id === id);
+    if (!player || !player.disconnected) return false;
+
+    // 已 all-in：筹码已进池，只等结算
+    if (player.allIn) return true;
+    if (player.folded) return true;
+
+    player.folded = true;
+    this.addLog(`${player.name} 断线超时，本局弃牌`);
+
+    const current = this.players[this.currentPlayerIndex];
+    if (this.isHandInProgress() && current && current.id === id) {
+      this.checkRoundEnd();
+    } else {
+      this.bumpTurnSeq();
     }
     return true;
   }
@@ -366,6 +463,7 @@ class PokerGame {
       const p = this.players[idx];
       if (!p.folded && !p.allIn) {
         this.currentPlayerIndex = idx;
+        this.bumpTurnSeq();
         return;
       }
     }
@@ -418,6 +516,8 @@ class PokerGame {
     const needAction = this.players.some(p => !p.folded && !p.allIn);
     if (!needAction) {
       this.advanceStage();
+    } else {
+      this.bumpTurnSeq();
     }
   }
 
@@ -570,8 +670,10 @@ class PokerGame {
 
     this.pot = 0;
     this.stage = 'ended';
+    this.turnDeadline = null;
     this.removeDisconnectedPlayers();
     this.advanceButton();
+    this.bumpTurnSeq();
   }
 
   // 计算边池并分配
@@ -627,6 +729,9 @@ class PokerGame {
       sbIndex: this.sbIndex,
       bbIndex: this.bbIndex,
       result: this.result,
+      // 回合超时（PRD-02 §4.2）
+      turnDeadline: this.isTurnActive() ? (this.turnDeadline || null) : null,
+      turnTimeMs: this.turnTimeMs,
       winners: this.winners.map(w => ({
         name: w.player.name,
         amount: w.amount,

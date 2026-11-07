@@ -539,3 +539,44 @@ body {
   .community-cards .card .suit { font-size: 13px; }
   .seat { width: 76px; }
 }
+
+/* ===== PRD-02：连接横幅与回合倒计时 ===== */
+
+.conn-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 8px 16px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #b45309;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.conn-banner.ok {
+  background: #15803d;
+}
+
+.conn-banner.hidden {
+  display: none;
+}
+
+.turn-countdown {
+  font-size: 14px;
+  font-weight: 700;
+  color: #7dd3a0;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-countdown.warning {
+  color: #f87171;
+}
+
+.turn-countdown.hidden {
+  display: none;
+}

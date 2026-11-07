@@ -47,22 +47,115 @@ joinBtn.addEventListener('click', () => {
     alert('请输入昵称和房间号');
     return;
   }
-  socket.emit('join', { name, roomId: room });
+  joinRoom(name, room);
 });
 
-socket.on('joined', ({ playerId, roomId }) => {
+// ===== 会话持久化（PRD-02 §5）=====
+const SESSION_KEY = (roomId) => `poker:${roomId}`;
+let myToken = null;
+let myName = null;
+let currentRoomId = null;
+let retriedJoin = false;
+
+function loadSession(roomId) {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY(roomId));
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveSession(roomId, data) {
+  try {
+    localStorage.setItem(SESSION_KEY(roomId), JSON.stringify(data));
+  } catch (_) {
+    // localStorage 不可用（隐私模式）时静默降级为不记忆
+  }
+}
+
+function clearSession(roomId) {
+  try {
+    localStorage.removeItem(SESSION_KEY(roomId));
+  } catch (_) { /* ignore */ }
+}
+
+function joinRoom(name, room) {
+  const saved = loadSession(room);
+  const payload = { roomId: room, name };
+  if (saved && saved.playerId && saved.token) {
+    // 带上凭证尝试重连（服务端会校验，失败则提示）
+    payload.playerId = saved.playerId;
+    payload.token = saved.token;
+  }
+  socket.emit('join', payload);
+}
+
+// ===== 连接状态横幅 =====
+const connBanner = document.getElementById('conn-banner');
+
+function showBanner(text, ok = false) {
+  connBanner.textContent = text;
+  connBanner.classList.remove('hidden');
+  connBanner.classList.toggle('ok', ok);
+}
+
+function hideBanner() {
+  connBanner.classList.add('hidden');
+}
+
+socket.on('connect', () => {
+  // 已登录过就自动带凭证重连
+  if (currentRoomId && myName) {
+    showBanner('连接已断开，正在重连…');
+    joinRoom(myName, currentRoomId);
+  }
+});
+
+socket.on('disconnect', () => {
+  showBanner('连接已断开，正在重连…');
+});
+
+socket.on('session:replaced', ({ message } = {}) => {
+  showBanner(message || '会话已被其他窗口接管');
+  setTimeout(() => location.reload(), 1500);
+});
+
+socket.on('joined', ({ playerId, roomId, token, reconnected }) => {
   myPlayerId = playerId;
+  currentRoomId = roomId;
+  if (token) myToken = token;
+
+  const name = nameInput.value.trim() || myName || '';
+  myName = name;
+  saveSession(roomId, { playerId, token: myToken, name });
+
   loginScreen.classList.add('hidden');
   gameScreen.classList.remove('hidden');
   roomIdDisplay.textContent = roomId;
+
+  if (reconnected) showBanner('已恢复座位', true);
+  setTimeout(hideBanner, 2000);
 });
 
 socket.on('error', (msg) => {
+  // 重连凭证失效/座位已不存在时，清掉本地会话并回退为“新玩家加入”
+  if (typeof msg === 'string' && msg.includes('重连')) {
+    if (currentRoomId) clearSession(currentRoomId);
+    myToken = null;
+
+    if (currentRoomId && myName && !retriedJoin) {
+      retriedJoin = true;
+      socket.emit('join', { roomId: currentRoomId, name: myName });
+      return;
+    }
+  }
   alert(msg);
 });
 
 // ===== 离开 =====
 leaveBtn.addEventListener('click', () => {
+  if (currentRoomId) clearSession(currentRoomId);
   socket.emit('leave');
   location.reload();
 });
@@ -135,6 +228,47 @@ socket.on('state', (state) => {
   render(state);
 });
 
+// ===== 回合倒计时（PRD-02 §4.3）=====
+const turnCountdownEl = document.getElementById('turn-countdown');
+let countdownTimer = null;
+let clockOffsetMs = 0; // 服务端时间 - 本地时间
+
+function startCountdown(state) {
+  stopCountdown();
+
+  if (!state.turnDeadline) {
+    turnCountdownEl.classList.add('hidden');
+    return;
+  }
+
+  const myTurn = state.myTurn;
+  // 服务端时间偏差校准：以收到的 deadline 为基准，本地倒计时按差值推进
+  clockOffsetMs = 0;
+
+  const tick = () => {
+    const remaining = Math.max(0, state.turnDeadline - (Date.now() + clockOffsetMs));
+    const secs = Math.ceil(remaining / 1000);
+    turnCountdownEl.classList.remove('hidden');
+    turnCountdownEl.textContent = `${myTurn ? '剩余' : '等待'} ${secs}s`;
+    turnCountdownEl.classList.toggle('warning', remaining <= 10000);
+
+    if (remaining <= 0) {
+      stopCountdown();
+      turnCountdownEl.classList.add('hidden');
+    }
+  };
+
+  tick();
+  countdownTimer = setInterval(tick, 250);
+}
+
+function stopCountdown() {
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+}
+
 function render(state) {
   // 阶段
   const stageNames = {
@@ -154,6 +288,9 @@ function render(state) {
 
   // 操作区
   renderActions(state);
+
+  // 回合倒计时（PRD-02）
+  startCountdown(state);
 
   // 日志
   renderLog(state.log);
