@@ -580,3 +580,74 @@ body {
 .turn-countdown.hidden {
   display: none;
 }
+
+/* ===== PRD-03：训练模式 HUD ===== */
+
+.training-panel {
+  background: #1e2a24;
+  border: 1px solid #2f4a3c;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.training-panel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #c0d8c8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.training-tag {
+  font-size: 10px;
+  font-weight: 400;
+  color: #7dd3a0;
+  background: #14301f;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.training-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 13px;
+  border-bottom: 1px solid #253830;
+}
+
+.training-row:last-of-type {
+  border-bottom: none;
+}
+
+.training-label {
+  color: #8aa89a;
+}
+
+.training-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #e6f2ea;
+}
+
+.training-value.ahead { color: #7dd3a0; }
+.training-value.behind { color: #f87171; }
+
+#training-refresh {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* 机器人标记 */
+.bot-tag {
+  font-size: 9px;
+  font-weight: 700;
+  color: #0b1a12;
+  background: #7dd3a0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}

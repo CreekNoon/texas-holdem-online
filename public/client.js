@@ -228,6 +228,109 @@ socket.on('state', (state) => {
   render(state);
 });
 
+// ===== 训练模式 HUD（PRD-03 §5）=====
+const trainingPanel = document.getElementById('training-panel');
+const trainingToggle = document.getElementById('training-toggle');
+const trainingHandEl = document.getElementById('training-hand');
+const trainingEquityEl = document.getElementById('training-equity');
+const trainingOddsEl = document.getElementById('training-odds');
+const trainingOutsEl = document.getElementById('training-outs');
+const trainingRefresh = document.getElementById('training-refresh');
+
+let trainingEnabled = false;
+let lastEquityRequestAt = 0;
+
+function setTrainingEnabled(enabled) {
+  trainingEnabled = enabled;
+  trainingPanel.classList.toggle('hidden', !enabled);
+  trainingToggle.classList.toggle('active', enabled);
+  if (enabled) {
+    trainingToggle.textContent = '训练模式：开';
+    requestEquity();
+  } else {
+    trainingToggle.textContent = '训练模式';
+    trainingHandEl.textContent = '—';
+    trainingEquityEl.textContent = '—';
+    trainingOddsEl.textContent = '—';
+    trainingOutsEl.textContent = '—';
+  }
+}
+
+trainingToggle.addEventListener('click', () => setTrainingEnabled(!trainingEnabled));
+trainingRefresh.addEventListener('click', () => {
+  lastEquityRequestAt = 0;
+  requestEquity();
+});
+
+function requestEquity() {
+  if (!trainingEnabled || !currentState) return;
+  if (!['preflop', 'flop', 'turn', 'river'].includes(currentState.stage)) return;
+
+  const me = currentState.players.find(p => p.isSelf);
+  if (!me || !me.hand || me.hand.length !== 2) return;
+
+  const now = Date.now();
+  if (now - lastEquityRequestAt < 1000) return;
+  lastEquityRequestAt = now;
+
+  socket.emit('equity:request', {});
+}
+
+socket.on('equity:result', (r) => {
+  if (!trainingEnabled) return;
+  if (!r || r.error) {
+    trainingEquityEl.textContent = r && r.error ? r.error : '—';
+    return;
+  }
+  const pct = (r.equity * 100).toFixed(0);
+  trainingEquityEl.textContent = `${pct}%`;
+  trainingEquityEl.classList.toggle('ahead', r.equity >= 0.5);
+  trainingEquityEl.classList.toggle('behind', r.equity < 0.5);
+});
+
+function renderTraining(state) {
+  if (!trainingEnabled) return;
+  const me = state.players.find(p => p.isSelf);
+  if (!me) return;
+
+  // 底池赔率
+  const callAmount = state.callAmount || 0;
+  if (callAmount > 0) {
+    const odds = callAmount / (state.pot + callAmount);
+    trainingOddsEl.textContent = `${callAmount} / ${state.pot + callAmount} → 需 ${(odds * 100).toFixed(0)}%`;
+  } else {
+    trainingOddsEl.textContent = '无需跟注';
+  }
+
+  // 当前牌型（粗算：仅当公共牌 >= 3 张时请求服务端评估结果）
+  const cards = [...(me.hand || []), ...(state.community || [])];
+  trainingHandEl.textContent = cards.length >= 5 ? '见结算' : `${cards.length} 张`;
+
+  // 听牌数：粗略估算（同花/顺子差一张）
+  trainingOutsEl.textContent = estimateOuts(me.hand || [], state.community || []);
+}
+
+function estimateOuts(hole, board) {
+  const all = [...hole, ...board];
+  if (all.length < 4) return '—';
+
+  const suitCount = {};
+  for (const c of all) suitCount[c.suit] = (suitCount[c.suit] || 0) + 1;
+  const maxSuit = Math.max(...Object.values(suitCount));
+  if (maxSuit === 4) return '≈9（同花听牌）';
+
+  const vals = new Set(all.map(c => ({ '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13,'A':14 }[c.rank])));
+  const sorted = [...vals].sort((a, b) => a - b);
+  let run = 1;
+  let best = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === sorted[i - 1] + 1) { run++; best = Math.max(best, run); }
+    else run = 1;
+  }
+  if (best === 4) return '≈8（顺子听牌）';
+  return '0';
+}
+
 // ===== 回合倒计时（PRD-02 §4.3）=====
 const turnCountdownEl = document.getElementById('turn-countdown');
 let countdownTimer = null;
@@ -291,6 +394,10 @@ function render(state) {
 
   // 回合倒计时（PRD-02）
   startCountdown(state);
+
+  // 训练 HUD（PRD-03）
+  renderTraining(state);
+  if (trainingEnabled) requestEquity();
 
   // 日志
   renderLog(state.log);
@@ -383,7 +490,7 @@ function renderSeats(state) {
     seat.innerHTML = `
       <div class="avatar">${p.name.charAt(0).toUpperCase()}</div>
       ${tags}
-      <div class="name">${escapeHtml(p.name)}${p.disconnected ? ' (离线)' : ''}</div>
+      <div class="name">${escapeHtml(p.name)}${p.isBot ? '<span class="bot-tag">BOT</span>' : ''}${p.disconnected ? ' (离线)' : ''}</div>
       <div class="chips">${p.chips}</div>
       <div class="player-cards">${handCards}</div>
       <div class="bet-indicator">${betText}</div>

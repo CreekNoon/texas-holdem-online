@@ -55,12 +55,21 @@ class PokerGame {
   }
 
   // 当前是否轮到某个玩家行动（且阶段需要计时）
+  // 注意：这是“人类超时计时器”的判据，bot 回合由 BotScheduler 负责，不计时
   isTurnActive() {
-    if (!['preflop', 'flop', 'turn', 'river'].includes(this.stage)) return false;
+    if (!this.isActionPhase()) return false;
     const cur = this.players[this.currentPlayerIndex];
     if (!cur) return false;
     if (cur.folded || cur.allIn || cur.disconnected || cur.isBot) return false;
     return true;
+  }
+
+  // 当前是否处于“有人需要行动”的阶段（不区分人/机器人）
+  isActionPhase() {
+    if (!['preflop', 'flop', 'turn', 'river'].includes(this.stage)) return false;
+    const cur = this.players[this.currentPlayerIndex];
+    if (!cur) return false;
+    return !cur.folded && !cur.allIn;
   }
 
   addPlayer(id, name, socket) {
@@ -94,6 +103,60 @@ class PokerGame {
     };
     this.players.push(player);
     return player;
+  }
+
+  // 添加机器人（PRD-03 §4.3）
+  // 机器人不占“真人上限”，但总座位仍 ≤ MAX_PLAYERS
+  addBot(name, options = {}) {
+    if (this.isHandInProgress()) return null;
+    if (this.players.length >= MAX_PLAYERS) {
+      const broke = this.players.find(p => p.chips <= 0 && !p.disconnected);
+      if (!broke) return null;
+      this.removePlayer(broke.id);
+    }
+
+    const id = 'bot_' + crypto.randomUUID();
+    const player = {
+      id,
+      name: name || `机器人${this.players.filter(p => p.isBot).length + 1}`,
+      socketId: null,
+      token: null,
+      chips: this.startingChips,
+      hand: [],
+      folded: false,
+      allIn: false,
+      currentBet: 0,
+      totalBet: 0,
+      hasActed: false,
+      chipsAtHandStart: this.startingChips,
+      isBot: true,
+      botDifficulty: options.difficulty || 'normal',
+      disconnected: false,
+      disconnectedAt: null
+    };
+    this.players.push(player);
+    return player;
+  }
+
+  // 训练模式：补足机器人到指定数量
+  fillWithBots(targetCount, difficulty = 'normal') {
+    const added = [];
+    while (this.players.length < Math.min(targetCount, MAX_PLAYERS)) {
+      const bot = this.addBot(null, { difficulty });
+      if (!bot) break;
+      added.push(bot);
+    }
+    return added;
+  }
+
+  // 重置筹码（训练模式用）
+  resetChips(chips) {
+    const value = Number.isSafeInteger(chips) && chips > 0 ? chips : this.startingChips;
+    for (const p of this.players) {
+      p.chips = value;
+      p.chipsAtHandStart = value;
+    }
+    this.withdrawnChips = 0;
   }
 
   // 绑定/解绑 socket（PRD-02 §3.3）
@@ -748,6 +811,7 @@ class PokerGame {
         totalBet: p.totalBet,
         hasActed: p.hasActed,
         disconnected: p.disconnected,
+        isBot: !!p.isBot,
         isSelf: p.id === selfId,
         // 只有自己、或真正摊牌后的未弃牌者才可见底牌
         hand: (p.id === selfId || (this.wentToShowdown && !p.folded)) ? p.hand : [],

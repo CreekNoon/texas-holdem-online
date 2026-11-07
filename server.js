@@ -4,6 +4,8 @@ const path = require('path');
 const crypto = require('node:crypto');
 const { Server } = require('socket.io');
 const PokerGame = require('./game/pokerGame');
+const { BotScheduler } = require('./game/botScheduler');
+const { equity } = require('./game/equity');
 
 const app = express();
 const server = http.createServer(app);
@@ -19,11 +21,15 @@ const rooms = new Map(); // roomId -> { game, playerIds: Set<socketId>, lastActi
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,20}$/;
 const MAX_NAME_LEN = 12;
 const MAX_CHAT_LEN = 100;
+const MAX_PLAYERS = 7;
 const IDLE_ROOM_MS = 30 * 60 * 1000;
 
-// 可注入的时长，便于测试（PRD-02 §6）
+// 可注入的时长，便于测试（PRD-02 §6 / PRD-03）
 const TURN_TIME_MS = Number(process.env.TURN_TIME_MS) || 30000;
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS) || 120000;
+const BOT_MIN_DELAY_MS = Number(process.env.BOT_MIN_DELAY_MS) || 600;
+const BOT_MAX_DELAY_MS = Number(process.env.BOT_MAX_DELAY_MS) || 1400;
+const EQUITY_ITERATIONS = Number(process.env.EQUITY_ITERATIONS) || 3000;
 
 function isValidRoomId(roomId) {
   return typeof roomId === 'string' && ROOM_ID_RE.test(roomId);
@@ -39,14 +45,31 @@ function sanitizeText(value, maxLen) {
 function getRoom(roomId) {
   let room = rooms.get(roomId);
   if (!room) {
+    const game = new PokerGame(roomId, { turnTimeMs: TURN_TIME_MS });
     room = {
-      game: new PokerGame(roomId, { turnTimeMs: TURN_TIME_MS }),
+      game,
       playerIds: new Set(),
       lastActivityAt: Date.now(),
       turnTimer: null,
       turnTimerSeq: -1,
-      graceTimers: new Map() // playerId -> timeout
+      graceTimers: new Map(), // playerId -> timeout
+      botScheduler: null,
+      config: {
+        mode: 'cash',
+        fillWithBots: false,
+        botCount: 3,
+        botDifficulty: 'normal'
+      }
     };
+    room.botScheduler = new BotScheduler(game, {
+      minDelay: BOT_MIN_DELAY_MS,
+      maxDelay: BOT_MAX_DELAY_MS,
+      onAction: () => {
+        // 机器人行动后继续走统一状态变更流程（会再次 tick，调度下一个 bot）
+        touch(room);
+        afterStateChange(room);
+      }
+    });
     rooms.set(roomId, room);
   }
   return room;
@@ -86,6 +109,13 @@ function clearTurnTimer(room) {
   }
   room.turnTimerSeq = -1;
   room.game.turnDeadline = null;
+}
+
+// 每次状态变化后统一调用：先驱动机器人，再刷新计时器与广播
+function afterStateChange(room) {
+  if (room.botScheduler) room.botScheduler.tick();
+  armTurnTimer(room);
+  broadcastState(room);
 }
 
 // 只在“回合切换”时重新 arm，避免 join/chat 替当前玩家续时
@@ -131,8 +161,7 @@ function onTurnTimeout(room, playerId) {
   }
 
   touch(room);
-  armTurnTimer(room); // 先 arm，再广播
-  broadcastState(room);
+  afterStateChange(room);
 }
 
 // ===== 断线宽限期（PRD-02 §3.3）=====
@@ -163,8 +192,7 @@ function armGraceTimer(room, playerId) {
     }
 
     touch(room);
-    armTurnTimer(room);
-    broadcastState(room);
+    afterStateChange(room);
   }, RECONNECT_GRACE_MS);
 
   room.graceTimers.set(playerId, timer);
@@ -235,8 +263,7 @@ io.on('connection', (socket) => {
         name: existing.name,
         reconnected: true
       });
-      armTurnTimer(room);
-      broadcastState(room);
+      afterStateChange(room);
       return;
     }
 
@@ -297,8 +324,7 @@ io.on('connection', (socket) => {
     if (!room) return;
     if (room.game.startHand()) {
       touch(room);
-      armTurnTimer(room); // 先 arm，再广播，保证 state 里带 turnDeadline
-      broadcastState(room);
+      afterStateChange(room);
     } else if (room.game.stage === 'waiting' || room.game.stage === 'ended') {
       socket.emit('error', '无法开始新一局：至少需要 2 名还有筹码的玩家');
     }
@@ -318,8 +344,7 @@ io.on('connection', (socket) => {
     if (room.game.playerAction(playerId, action, amount)) {
       touch(room);
       clearTurnTimer(room);
-      armTurnTimer(room); // 先 arm，再广播
-      broadcastState(room);
+      afterStateChange(room);
     } else {
       socket.emit('error', '无效操作');
     }
@@ -344,7 +369,149 @@ io.on('connection', (socket) => {
   socket.on('disconnect', safeHandler(socket, () => {
     handleDisconnect(socket);
   }));
+
+  // ===== 训练模式：房间配置（PRD-03 §4.3）=====
+  socket.on('room:configure', safeHandler(socket, (payload) => {
+    if (!payload || typeof payload !== 'object') {
+      socket.emit('error', '参数错误');
+      return;
+    }
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+
+    const { mode, fillWithBots, botCount, botDifficulty } = payload;
+
+    if (mode !== undefined) {
+      if (!['cash', 'training'].includes(mode)) {
+        socket.emit('error', '未知房间模式');
+        return;
+      }
+      room.config.mode = mode;
+    }
+    if (fillWithBots !== undefined) room.config.fillWithBots = !!fillWithBots;
+    if (botCount !== undefined) {
+      if (!Number.isInteger(botCount) || botCount < 0 || botCount > 6) {
+        socket.emit('error', 'botCount 必须是 0–6 的整数');
+        return;
+      }
+      room.config.botCount = botCount;
+    }
+    if (botDifficulty !== undefined) {
+      if (!['easy', 'normal', 'hard'].includes(botDifficulty)) {
+        socket.emit('error', '未知难度');
+        return;
+      }
+      room.config.botDifficulty = botDifficulty;
+    }
+
+    // 训练模式默认补机器人
+    if (room.config.mode === 'training' || room.config.fillWithBots) {
+      fillBots(room);
+    }
+
+    touch(room);
+    broadcastState(room);
+  }));
+
+  // ===== 训练模式：补机器人 / 重置筹码 =====
+  socket.on('training:fill', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    const count = Number.isInteger(payload && payload.count)
+      ? payload.count
+      : room.config.botCount;
+    fillBots(room, count, payload && payload.difficulty);
+    touch(room);
+    broadcastState(room);
+  }));
+
+  socket.on('training:reset', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    if (room.game.isHandInProgress()) {
+      socket.emit('error', '本局进行中，无法重置筹码');
+      return;
+    }
+    room.game.resetChips(payload && payload.chips);
+    touch(room);
+    broadcastState(room);
+  }));
+
+  // ===== 训练模式：胜率查询（PRD-03 §3.3）=====
+  socket.on('equity:request', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+
+    // 只允许查询自己的底牌
+    const player = room.game.players.find(p => p.id === socket.data.playerId);
+    if (!player) {
+      socket.emit('equity:result', { error: '不在房间内' });
+      return;
+    }
+    if (!player.hand || player.hand.length !== 2) {
+      socket.emit('equity:result', { error: '当前没有底牌' });
+      return;
+    }
+    if (room.game.isHandInProgress() === false) {
+      socket.emit('equity:result', { error: '牌局未开始' });
+      return;
+    }
+
+    // 限流：同一玩家 1 秒最多 1 次
+    const now = Date.now();
+    if (!room.equityLastAt) room.equityLastAt = new Map();
+    const last = room.equityLastAt.get(player.id) || 0;
+    if (now - last < 1000) {
+      socket.emit('equity:result', { error: '请求过于频繁' });
+      return;
+    }
+    room.equityLastAt.set(player.id, now);
+
+    // 对手数量：未弃牌的其他玩家
+    const opponentCount = room.game.players
+      .filter(p => !p.folded && p.id !== player.id).length;
+
+    if (opponentCount < 1) {
+      socket.emit('equity:result', { error: '没有对手' });
+      return;
+    }
+
+    try {
+      const result = equity({
+        hole: player.hand,
+        board: room.game.community,
+        opponents: Math.min(opponentCount, 6),
+        iterations: EQUITY_ITERATIONS
+      });
+      socket.emit('equity:result', {
+        equity: result.equity,
+        win: result.win,
+        tie: result.tie,
+        lose: result.lose,
+        iterations: result.iterations,
+        cached: result.cached
+      });
+    } catch (err) {
+      socket.emit('equity:result', { error: '计算失败' });
+    }
+  }));
 });
+
+// 补机器人（训练模式）
+function fillBots(room, count, difficulty) {
+  const target = Math.min(
+    Number.isInteger(count) ? count : room.config.botCount,
+    MAX_PLAYERS
+  );
+  const diff = difficulty && ['easy', 'normal', 'hard'].includes(difficulty)
+    ? difficulty
+    : room.config.botDifficulty;
+  const added = room.game.fillWithBots(target, diff);
+  if (added.length) {
+    room.game.addLog(`补充 ${added.length} 个机器人（${diff}）`);
+  }
+  return added;
+}
 
 // 显式离开：立即弃牌 + 立即移除（不进入宽限期）
 function handleLeave(socket) {
@@ -385,11 +552,11 @@ function handleLeave(socket) {
 
   if (room.playerIds.size === 0 && room.game.players.length === 0) {
     clearTurnTimer(room);
+    if (room.botScheduler) room.botScheduler.stop();
     rooms.delete(roomId);
     return;
   }
-  armTurnTimer(room);
-  broadcastState(room);
+  afterStateChange(room);
 }
 
 // 断线：保留座位 + 宽限期，不立即弃牌（PRD-02 §3.3）
@@ -418,8 +585,7 @@ function handleDisconnect(socket) {
     touch(room);
     armGraceTimer(room, playerId);
     // 掉线玩家不计时：armTurnTimer 会因 isTurnActive() 为 false 而清除计时器
-    armTurnTimer(room);
-    broadcastState(room);
+    afterStateChange(room);
   }
 
   socket.data.roomId = null;
@@ -433,6 +599,7 @@ setInterval(() => {
     const noSockets = room.playerIds.size === 0;
     if (noSockets && now - room.lastActivityAt > IDLE_ROOM_MS) {
       clearTurnTimer(room);
+      if (room.botScheduler) room.botScheduler.stop();
       for (const t of room.graceTimers.values()) clearTimeout(t);
       room.graceTimers.clear();
       rooms.delete(roomId);
@@ -444,6 +611,7 @@ setInterval(() => {
 function shutdown() {
   for (const room of rooms.values()) {
     clearTurnTimer(room);
+    if (room.botScheduler) room.botScheduler.stop();
     for (const t of room.graceTimers.values()) clearTimeout(t);
     room.graceTimers.clear();
   }

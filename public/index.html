@@ -38,6 +38,7 @@
       <button id="copy-room" class="btn-small">复制</button>
     </div>
     <div class="header-right">
+      <button id="training-toggle" class="btn-small">训练模式</button>
       <button id="leave-btn" class="btn-small">离开</button>
     </div>
   </div>
@@ -89,6 +90,28 @@
 
     <!-- 侧边栏：聊天和日志 -->
     <div class="sidebar">
+      <!-- 训练模式 HUD（PRD-03 §5，仅自己可见） -->
+      <div class="training-panel hidden" id="training-panel">
+        <h3>训练辅助 <span class="training-tag">仅自己可见</span></h3>
+        <div class="training-row">
+          <span class="training-label">当前牌型</span>
+          <span class="training-value" id="training-hand">—</span>
+        </div>
+        <div class="training-row">
+          <span class="training-label">胜率</span>
+          <span class="training-value" id="training-equity">—</span>
+        </div>
+        <div class="training-row">
+          <span class="training-label">底池赔率</span>
+          <span class="training-value" id="training-odds">—</span>
+        </div>
+        <div class="training-row">
+          <span class="training-label">听牌数</span>
+          <span class="training-value" id="training-outs">—</span>
+        </div>
+        <button class="btn-small" id="training-refresh">刷新胜率</button>
+      </div>
+
       <div class="log-panel">
         <h3>牌局日志</h3>
         <div id="game-log"></div>

@@ -1,18 +1,6 @@
 const { rankValue } = require('./deck');
-
-// 手牌等级 (数值越大越强)
-const HAND_RANK = {
-  HIGH_CARD: 0,
-  ONE_PAIR: 1,
-  TWO_PAIR: 2,
-  THREE_OF_A_KIND: 3,
-  STRAIGHT: 4,
-  FLUSH: 5,
-  FULL_HOUSE: 6,
-  FOUR_OF_A_KIND: 7,
-  STRAIGHT_FLUSH: 8,
-  ROYAL_FLUSH: 9
-};
+const { HAND_RANK } = require('./handRank');
+const { evaluate7 } = require('./evaluator7');
 
 // 评估一副 5 张牌，返回 { rank, name, tiebreakers: [..] }
 // 不足 5 张返回 null（不足 5 张无法构成完整牌型，见 PRD-01 §3.10）
@@ -116,7 +104,25 @@ function combinations(arr, k) {
 
 // 从 5–7 张牌中评估最佳 5 张牌
 // 不足 5 张返回 null，不抛错
+// 7 张走快速路径 evaluate7，5/6 张仍用组合枚举
 function evaluateBest(cards) {
+  if (!Array.isArray(cards) || cards.length < 5) return null;
+  if (cards.length === 5) return evaluate5(cards);
+  if (cards.length === 7) return evaluate7(cards);
+
+  const combos = combinations(cards, 5);
+  let best = null;
+  for (const combo of combos) {
+    const hand = evaluate5(combo);
+    if (!best || compareHands(hand, best) > 0) {
+      best = hand;
+    }
+  }
+  return best;
+}
+
+// 暴力实现：仅用于测试对照（PRD-03 §3.2）
+function evaluateBestBruteForce(cards) {
   if (!Array.isArray(cards) || cards.length < 5) return null;
   if (cards.length === 5) return evaluate5(cards);
 
@@ -146,4 +152,4 @@ function compareHands(a, b) {
   return 0;
 }
 
-module.exports = { evaluate5, evaluateBest, compareHands, HAND_RANK };
+module.exports = { evaluate5, evaluateBest, evaluateBestBruteForce, compareHands, HAND_RANK };
