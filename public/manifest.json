@@ -1,0 +1,26 @@
+{
+  "name": "德州扑克 · 在线对战",
+  "short_name": "德州扑克",
+  "description": "2-7 人在线德州扑克，支持断线重连、回合超时与机器人训练",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0e1a",
+  "theme_color": "#0f1a14",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

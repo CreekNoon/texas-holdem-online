@@ -104,21 +104,32 @@ function combinations(arr, k) {
 
 // 从 5–7 张牌中评估最佳 5 张牌
 // 不足 5 张返回 null，不抛错
-// 7 张走快速路径 evaluate7，5/6 张仍用组合枚举
-function evaluateBest(cards) {
+// 7 张默认走快速路径 evaluate7（PRD-03 §3.2）；
+// 传 { withCards: true } 时额外返回 bestCards（PRD-04 §3.5），此时走组合枚举。
+function evaluateBest(cards, options = {}) {
   if (!Array.isArray(cards) || cards.length < 5) return null;
-  if (cards.length === 5) return evaluate5(cards);
-  if (cards.length === 7) return evaluate7(cards);
+  const { withCards = false } = options;
+
+  if (cards.length === 5) {
+    const hand = evaluate5(cards);
+    return withCards && hand ? { ...hand, bestCards: cards.slice() } : hand;
+  }
+
+  if (cards.length === 7 && !withCards) {
+    return evaluate7(cards);
+  }
 
   const combos = combinations(cards, 5);
   let best = null;
+  let bestCombo = null;
   for (const combo of combos) {
     const hand = evaluate5(combo);
     if (!best || compareHands(hand, best) > 0) {
       best = hand;
+      bestCombo = combo;
     }
   }
-  return best;
+  return withCards && best ? { ...best, bestCards: bestCombo } : best;
 }
 
 // 暴力实现：仅用于测试对照（PRD-03 §3.2）

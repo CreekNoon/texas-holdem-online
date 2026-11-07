@@ -54,11 +54,17 @@ function getRoom(roomId) {
       turnTimerSeq: -1,
       graceTimers: new Map(), // playerId -> timeout
       botScheduler: null,
+      hostId: null,
+      spectators: new Set(), // socketId 集合，不占座位
+      spectatorSeeAll: false,
       config: {
         mode: 'cash',
         fillWithBots: false,
         botCount: 3,
-        botDifficulty: 'normal'
+        botDifficulty: 'normal',
+        // 默认不强制准备，避免破坏既有"点开始就开局"的用法；
+        // 房主可在大厅显式开启（PRD-04 §3.2）
+        requireReady: false
       }
     };
     room.botScheduler = new BotScheduler(game, {
@@ -83,9 +89,45 @@ function broadcastState(room) {
   for (const sid of room.playerIds) {
     const sock = io.sockets.sockets.get(sid);
     if (sock) {
-      sock.emit('state', room.game.getPublicState(sock.data.playerId));
+      sock.emit('state', buildRoomState(room, sock.data.playerId));
     }
   }
+  // 观战者：不占座位，单独下发（默认看不到底牌）
+  for (const sid of room.spectators) {
+    const sock = io.sockets.sockets.get(sid);
+    if (sock) {
+      sock.emit('state', buildRoomState(room, null, true));
+    }
+  }
+}
+
+// 组装下发给客户端的完整房间状态（PRD-04 §3.2/§3.3）
+function buildRoomState(room, selfId, isSpectator = false) {
+  const state = room.game.getPublicState(selfId);
+
+  // 观战者：默认看不到任何底牌；房主显式开启 spectatorSeeAll 后才公开
+  if (isSpectator) {
+    for (const p of state.players) {
+      const isShownAtShowdown = state.result && state.result.players
+        && state.result.players.find(x => x.id === p.id && x.shown);
+      p.hand = (room.spectatorSeeAll && isShownAtShowdown) ? p.hand : [];
+    }
+    state.winners = state.winners.map(w => ({ ...w, hand: room.spectatorSeeAll ? w.hand : null }));
+  }
+
+  state.hostId = room.hostId;
+  state.isHost = !!selfId && room.hostId === selfId;
+  state.spectator = isSpectator;
+  state.spectatorSeeAll = !!room.spectatorSeeAll;
+  state.spectatorCount = room.spectators.size;
+  state.requireReady = room.config.requireReady;
+  state.readyIds = room.game.players.filter(p => p.ready).map(p => p.id);
+  state.config = {
+    mode: room.config.mode,
+    botCount: room.config.botCount,
+    botDifficulty: room.config.botDifficulty
+  };
+  return state;
 }
 
 // 统一包装 socket handler：任何异常都不能打崩进程
@@ -208,7 +250,7 @@ io.on('connection', (socket) => {
       socket.emit('error', '参数错误');
       return;
     }
-    const { roomId, name, playerId, token } = payload;
+    const { roomId, name, playerId, token, spectate } = payload;
 
     if (!isValidRoomId(roomId)) {
       socket.emit('error', '房间号只能是 1–20 位字母、数字、下划线或短横线');
@@ -268,6 +310,21 @@ io.on('connection', (socket) => {
     }
 
     // ===== 新建玩家路径 =====
+    // 观战：不占座位，走独立列表（PRD-04 §3.3）
+    if (spectate) {
+      const spectatorName = sanitizeText(name, MAX_NAME_LEN) || '观众';
+      socket.data.roomId = roomId;
+      socket.data.playerId = null;
+      socket.data.spectating = true;
+      socket.join(roomId);
+      room.spectators.add(socket.id);
+      touch(room);
+      socket.emit('joined', { roomId, spectator: true, name: spectatorName, reconnected: false });
+      broadcastState(room);
+      io.to(roomId).emit('chat', { system: true, text: `${spectatorName} 以观战身份加入` });
+      return;
+    }
+
     const cleanName = sanitizeText(name, MAX_NAME_LEN);
     if (!cleanName) {
       socket.emit('error', '昵称需为 1–12 个字符');
@@ -307,6 +364,9 @@ io.on('connection', (socket) => {
     room.playerIds.add(socket.id);
     touch(room);
 
+    // 首个加入者成为房主（PRD-04 §3.2）
+    if (!room.hostId) room.hostId = newId;
+
     socket.emit('joined', {
       playerId: newId,
       token: player.token,
@@ -322,12 +382,87 @@ io.on('connection', (socket) => {
     const roomId = socket.data.roomId;
     const room = rooms.get(roomId);
     if (!room) return;
+    if (socket.data.spectating) {
+      socket.emit('error', '观战者不能开始游戏');
+      return;
+    }
+
+    // 房主校验（PRD-04 §3.2）
+    if (room.hostId && room.hostId !== socket.data.playerId) {
+      socket.emit('error', '等待房主开始');
+      return;
+    }
+
+    // 准备校验：所有在线真人必须 ready（房主可关闭）
+    if (room.config.requireReady) {
+      const notReady = room.game.players.filter(
+        p => !p.isBot && !p.disconnected && !p.ready
+      );
+      if (notReady.length > 0) {
+        socket.emit('error', `还有玩家未准备：${notReady.map(p => p.name).join('、')}`);
+        return;
+      }
+    }
+
     if (room.game.startHand()) {
       touch(room);
       afterStateChange(room);
     } else if (room.game.stage === 'waiting' || room.game.stage === 'ended') {
       socket.emit('error', '无法开始新一局：至少需要 2 名还有筹码的玩家');
     }
+  }));
+
+  // ===== 准备状态（PRD-04 §3.2）=====
+  socket.on('ready', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    if (socket.data.spectating) return;
+
+    const player = room.game.players.find(p => p.id === socket.data.playerId);
+    if (!player) return;
+
+    const wantReady = payload && typeof payload.ready === 'boolean' ? payload.ready : !player.ready;
+    player.ready = wantReady;
+    touch(room);
+    broadcastState(room);
+  }));
+
+  // ===== 房主配置（PRD-04 §3.2）=====
+  socket.on('host:config', safeHandler(socket, (payload = {}) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    if (socket.data.spectating) return;
+    if (room.hostId !== socket.data.playerId) {
+      socket.emit('error', '只有房主可以修改配置');
+      return;
+    }
+    // 牌局进行中禁止改配置（会破坏 pot == Σ totalBet）
+    if (room.game.isHandInProgress()) {
+      socket.emit('error', '牌局进行中无法修改配置');
+      return;
+    }
+
+    const { requireReady, spectatorSeeAll, smallBlind, bigBlind, startingChips } = payload;
+
+    if (requireReady !== undefined) room.config.requireReady = !!requireReady;
+    if (spectatorSeeAll !== undefined) room.spectatorSeeAll = !!spectatorSeeAll;
+
+    if (smallBlind !== undefined || bigBlind !== undefined || startingChips !== undefined) {
+      const sb = Number.isInteger(smallBlind) ? smallBlind : room.game.smallBlind;
+      const bb = Number.isInteger(bigBlind) ? bigBlind : room.game.bigBlind;
+      const chips = Number.isInteger(startingChips) ? startingChips : room.game.startingChips;
+
+      if (sb < 1 || bb < sb || chips < bb * 2) {
+        socket.emit('error', '盲注/筹码配置不合法');
+        return;
+      }
+      room.game.smallBlind = sb;
+      room.game.bigBlind = bb;
+      room.game.startingChips = chips;
+    }
+
+    touch(room);
+    broadcastState(room);
   }));
 
   socket.on('action', safeHandler(socket, (payload) => {
@@ -516,14 +651,33 @@ function fillBots(room, count, difficulty) {
 // 显式离开：立即弃牌 + 立即移除（不进入宽限期）
 function handleLeave(socket) {
   const roomId = socket.data.roomId;
-  const playerId = socket.data.playerId;
-  if (!roomId || !playerId) return;
+  if (!roomId) return;
   const room = rooms.get(roomId);
   if (!room) {
     socket.data.roomId = null;
     socket.data.playerId = null;
+    socket.data.spectating = false;
     return;
   }
+
+  // 观战者离开：从独立列表移除即可
+  if (socket.data.spectating) {
+    room.spectators.delete(socket.id);
+    socket.data.roomId = null;
+    socket.data.spectating = false;
+    touch(room);
+    if (room.playerIds.size === 0 && room.spectators.size === 0 && room.game.players.length === 0) {
+      clearTurnTimer(room);
+      if (room.botScheduler) room.botScheduler.stop();
+      rooms.delete(roomId);
+      return;
+    }
+    broadcastState(room);
+    return;
+  }
+
+  const playerId = socket.data.playerId;
+  if (!playerId) return;
 
   const player = room.game.players.find(p => p.id === playerId);
   if (player) {
@@ -543,6 +697,13 @@ function handleLeave(socket) {
     } else {
       room.game.removePlayer(playerId);
     }
+
+    // 房主离开时顺延给下一位在线真人（PRD-04 §3.2）
+    if (room.hostId === playerId) {
+      const next = room.game.players.find(p => !p.isBot && !p.disconnected)
+        || room.game.players.find(p => !p.disconnected);
+      room.hostId = next ? next.id : null;
+    }
     touch(room);
   }
 
@@ -550,7 +711,7 @@ function handleLeave(socket) {
   socket.data.roomId = null;
   socket.data.playerId = null;
 
-  if (room.playerIds.size === 0 && room.game.players.length === 0) {
+  if (room.playerIds.size === 0 && room.spectators.size === 0 && room.game.players.length === 0) {
     clearTurnTimer(room);
     if (room.botScheduler) room.botScheduler.stop();
     rooms.delete(roomId);
@@ -563,13 +724,31 @@ function handleLeave(socket) {
 function handleDisconnect(socket) {
   const roomId = socket.data.roomId;
   const playerId = socket.data.playerId;
-  if (!roomId || !playerId) return;
+  if (!roomId) return;
   const room = rooms.get(roomId);
   if (!room) {
     socket.data.roomId = null;
     socket.data.playerId = null;
+    socket.data.spectating = false;
     return;
   }
+
+  // 观战者断线：直接移除
+  if (socket.data.spectating) {
+    room.spectators.delete(socket.id);
+    socket.data.roomId = null;
+    socket.data.spectating = false;
+    if (room.playerIds.size === 0 && room.spectators.size === 0 && room.game.players.length === 0) {
+      clearTurnTimer(room);
+      if (room.botScheduler) room.botScheduler.stop();
+      rooms.delete(roomId);
+      return;
+    }
+    broadcastState(room);
+    return;
+  }
+
+  if (!playerId) return;
 
   const player = room.game.players.find(p => p.id === playerId);
   if (player) {

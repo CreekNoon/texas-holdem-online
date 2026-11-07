@@ -98,6 +98,7 @@ class PokerGame {
       hasActed: false,
       chipsAtHandStart: this.startingChips,
       isBot: false,
+      ready: false,
       disconnected: false,
       disconnectedAt: null
     };
@@ -130,6 +131,7 @@ class PokerGame {
       hasActed: false,
       chipsAtHandStart: this.startingChips,
       isBot: true,
+      ready: true, // 机器人总是已准备
       botDifficulty: options.difficulty || 'normal',
       disconnected: false,
       disconnectedAt: null
@@ -612,7 +614,8 @@ class PokerGame {
     if (this.wentToShowdown) {
       for (const p of this.players) {
         if (!p.folded && p.hand.length === 2) {
-          playerHands[p.id] = evaluateBest([...p.hand, ...this.community]);
+          // withCards: true → 结算快照需要最佳五张（PRD-04 §3.5）
+          playerHands[p.id] = evaluateBest([...p.hand, ...this.community], { withCards: true });
         }
       }
     }
@@ -709,6 +712,10 @@ class PokerGame {
         net: p.chips - (p.chipsAtHandStart || 0),
         handName: (this.wentToShowdown && !p.folded && playerHands[p.id])
           ? playerHands[p.id].name
+          : null,
+        // 最佳五张（PRD-04 §3.5）；只有真正摊牌且未弃牌才有
+        bestCards: (this.wentToShowdown && !p.folded && playerHands[p.id] && playerHands[p.id].bestCards)
+          ? playerHands[p.id].bestCards
           : null,
         shown: !!(this.wentToShowdown && !p.folded)
       }))
@@ -811,6 +818,7 @@ class PokerGame {
         totalBet: p.totalBet,
         hasActed: p.hasActed,
         disconnected: p.disconnected,
+        ready: !!p.ready,
         isBot: !!p.isBot,
         isSelf: p.id === selfId,
         // 只有自己、或真正摊牌后的未弃牌者才可见底牌

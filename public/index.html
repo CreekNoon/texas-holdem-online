@@ -2,8 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1a14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>德州扑克 · 在线对战</title>
+  <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,14 +18,15 @@
     <h1>♠ 德州扑克 ♥</h1>
     <p class="subtitle">在线多人对战 · 支持 2-7 人</p>
     <div class="form-group">
-      <label>昵称</label>
-      <input type="text" id="name-input" placeholder="输入你的昵称" maxlength="12">
+      <label for="name-input">昵称</label>
+      <input type="text" id="name-input" placeholder="输入你的昵称" maxlength="12" autocomplete="nickname">
     </div>
     <div class="form-group">
-      <label>房间号</label>
-      <input type="text" id="room-input" placeholder="输入或创建房间号" maxlength="20">
+      <label for="room-input">房间号</label>
+      <input type="text" id="room-input" placeholder="输入或创建房间号" maxlength="20" autocomplete="off">
     </div>
     <button id="join-btn" class="btn-primary">进入房间</button>
+    <button id="spectate-btn" class="btn-small btn-block">以观战身份进入</button>
     <p class="tip">提示：同一房间号的玩家会进入同一桌。创建房间后把房间号分享给朋友即可联机。</p>
   </div>
 </div>
@@ -29,17 +34,20 @@
 <!-- 游戏界面 -->
 <div id="game-screen" class="screen hidden">
   <!-- 连接状态横幅（PRD-02） -->
-  <div id="conn-banner" class="conn-banner hidden"></div>
+  <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite"></div>
 
   <div class="game-header">
     <div class="room-info">
       <span class="label">房间:</span>
       <span id="room-id-display"></span>
-      <button id="copy-room" class="btn-small">复制</button>
+      <button id="copy-room" class="btn-small" aria-label="复制房间号">复制</button>
+      <button id="invite-btn" class="btn-small" aria-label="邀请朋友">邀请</button>
     </div>
     <div class="header-right">
-      <button id="training-toggle" class="btn-small">训练模式</button>
-      <button id="leave-btn" class="btn-small">离开</button>
+      <span id="spectator-badge" class="spectator-badge hidden">观战视角</span>
+      <button id="settings-btn" class="btn-small" aria-label="设置">设置</button>
+      <button id="training-toggle" class="btn-small" aria-label="训练模式">训练模式</button>
+      <button id="leave-btn" class="btn-small" aria-label="离开房间">离开</button>
     </div>
   </div>
 
@@ -48,7 +56,7 @@
       <div id="poker-table">
         <div class="table-felt">
           <!-- 社区牌 -->
-          <div class="community-cards" id="community-cards"></div>
+          <div class="community-cards" id="community-cards" aria-label="公共牌"></div>
           <!-- 底池 -->
           <div class="pot-display">
             <div class="pot-label">底池</div>
@@ -61,10 +69,18 @@
         </div>
       </div>
 
+      <!-- 大厅 / 准备区（PRD-04 §3.2） -->
+      <div class="lobby-bar hidden" id="lobby-bar">
+        <div class="lobby-info" id="lobby-info">等待玩家加入…</div>
+        <div class="lobby-actions">
+          <button id="ready-btn" class="btn-primary">准备</button>
+        </div>
+      </div>
+
       <!-- 操作区 -->
       <div class="action-bar" id="action-bar">
         <div class="action-info">
-          <div id="turn-info">等待其他玩家...</div>
+          <div id="turn-info" aria-live="polite">等待其他玩家...</div>
           <div id="turn-countdown" class="turn-countdown hidden"></div>
           <div class="bet-info">
             <span>跟注: <b id="call-amount">0</b></span>
@@ -72,15 +88,15 @@
           </div>
         </div>
         <div class="action-buttons">
-          <button class="btn-action fold" data-action="fold">弃牌</button>
-          <button class="btn-action check" data-action="check">过牌</button>
-          <button class="btn-action call" data-action="call">跟注</button>
+          <button class="btn-action fold" data-action="fold" aria-label="弃牌 (F)">弃牌</button>
+          <button class="btn-action check" data-action="check" aria-label="过牌 (C)">过牌</button>
+          <button class="btn-action call" data-action="call" aria-label="跟注 (C)">跟注</button>
           <div class="raise-group">
-            <input type="range" id="raise-slider" min="0" max="100" value="0">
-            <input type="number" id="raise-input" min="0" value="0">
-            <button class="btn-action raise" data-action="raise">加注</button>
+            <input type="range" id="raise-slider" min="0" max="100" value="0" aria-label="加注金额滑杆">
+            <input type="number" id="raise-input" min="0" value="0" aria-label="加注金额">
+            <button class="btn-action raise" data-action="raise" aria-label="加注 (R)">加注</button>
           </div>
-          <button class="btn-action allin" data-action="allin">全押</button>
+          <button class="btn-action allin" data-action="allin" aria-label="全押 (A)">全押</button>
         </div>
         <div class="start-area" id="start-area">
           <button id="start-btn" class="btn-primary">开始新一局</button>
@@ -89,7 +105,7 @@
     </div>
 
     <!-- 侧边栏：聊天和日志 -->
-    <div class="sidebar">
+    <div class="sidebar" id="sidebar">
       <!-- 训练模式 HUD（PRD-03 §5，仅自己可见） -->
       <div class="training-panel hidden" id="training-panel">
         <h3>训练辅助 <span class="training-tag">仅自己可见</span></h3>
@@ -114,33 +130,88 @@
 
       <div class="log-panel">
         <h3>牌局日志</h3>
-        <div id="game-log"></div>
+        <div id="game-log" aria-live="polite"></div>
       </div>
       <div class="chat-panel">
         <h3>聊天</h3>
-        <div id="chat-messages"></div>
+        <div id="chat-messages" aria-live="polite"></div>
         <div class="chat-input">
-          <input type="text" id="chat-input" placeholder="输入消息..." maxlength="100">
+          <input type="text" id="chat-input" placeholder="输入消息..." maxlength="100" aria-label="聊天输入">
           <button id="chat-send">发送</button>
         </div>
       </div>
     </div>
   </div>
+
+  <!-- 移动端侧边栏抽屉按钮 -->
+  <button id="drawer-toggle" class="drawer-toggle" aria-label="打开侧边栏">☰</button>
 </div>
 
 <!-- 结算弹窗 -->
-<div id="result-modal" class="modal hidden">
+<div id="result-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="result-title">
   <div class="modal-content">
-    <h2>本局结算</h2>
+    <h2 id="result-title">本局结算</h2>
+    <div id="result-board" class="result-board"></div>
     <div id="result-details"></div>
+    <div id="result-pots" class="result-pots"></div>
     <div class="modal-actions">
-      <button id="result-next" class="btn-primary">开始下一局</button>
+      <button id="result-next" class="btn-primary">开始下一局<span id="result-countdown"></span></button>
+      <button id="result-share" class="btn-small">分享结果</button>
       <button id="result-close" class="btn-small">关闭</button>
     </div>
   </div>
 </div>
 
+<!-- 设置弹窗（PRD-04 §3.4 / §3.2） -->
+<div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="modal-content">
+    <h2 id="settings-title">设置</h2>
+
+    <div class="settings-row">
+      <label for="sound-toggle">音效</label>
+      <input type="checkbox" id="sound-toggle" checked>
+    </div>
+    <div class="settings-row">
+      <label for="anim-toggle">动画</label>
+      <input type="checkbox" id="anim-toggle" checked>
+    </div>
+
+    <div id="host-settings" class="host-settings hidden">
+      <h3>房主设置</h3>
+      <div class="settings-row">
+        <label for="require-ready">需要全员准备</label>
+        <input type="checkbox" id="require-ready">
+      </div>
+      <div class="settings-row">
+        <label for="spectator-see-all">观战可见全部底牌</label>
+        <input type="checkbox" id="spectator-see-all">
+      </div>
+      <div class="settings-row">
+        <label for="cfg-small-blind">小盲</label>
+        <input type="number" id="cfg-small-blind" min="1" value="10">
+      </div>
+      <div class="settings-row">
+        <label for="cfg-big-blind">大盲</label>
+        <input type="number" id="cfg-big-blind" min="2" value="20">
+      </div>
+      <div class="settings-row">
+        <label for="cfg-chips">初始筹码</label>
+        <input type="number" id="cfg-chips" min="40" value="1000">
+      </div>
+      <p class="tip" id="host-settings-tip">牌局进行中无法修改配置。</p>
+    </div>
+
+    <div class="modal-actions">
+      <button id="settings-close" class="btn-small">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 轻提示 -->
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
 <script src="/socket.io/socket.io.js"></script>
-<script src="client.js"></script>
+<script src="sound.js"></script>
+  <script src="client.js"></script>
 </body>
 </html>
