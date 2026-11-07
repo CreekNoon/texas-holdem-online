@@ -1,10 +1,12 @@
 {
   "name": "texas-holdem-online",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Online multiplayer Texas Hold'em poker game (2-7 players)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "test:random": "node --test test/invariants.test.js"
   },
   "dependencies": {
     "express": "^4.19.2",

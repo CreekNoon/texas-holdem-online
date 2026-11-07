@@ -15,7 +15,10 @@ const HAND_RANK = {
 };
 
 // 评估一副 5 张牌，返回 { rank, name, tiebreakers: [..] }
+// 不足 5 张返回 null（不足 5 张无法构成完整牌型，见 PRD-01 §3.10）
 function evaluate5(cards) {
+  if (!Array.isArray(cards) || cards.length !== 5) return null;
+
   const values = cards.map(c => rankValue(c.rank)).sort((a, b) => b - a);
   const suits = cards.map(c => c.suit);
 
@@ -111,12 +114,12 @@ function combinations(arr, k) {
   return result;
 }
 
-// 从 7 张牌中评估最佳 5 张牌
+// 从 5–7 张牌中评估最佳 5 张牌
+// 不足 5 张返回 null，不抛错
 function evaluateBest(cards) {
-  if (cards.length < 5) {
-    // 不足 5 张，用现有牌评估（仅用于展示）
-    return evaluate5(cards);
-  }
+  if (!Array.isArray(cards) || cards.length < 5) return null;
+  if (cards.length === 5) return evaluate5(cards);
+
   const combos = combinations(cards, 5);
   let best = null;
   for (const combo of combos) {
@@ -129,7 +132,11 @@ function evaluateBest(cards) {
 }
 
 // 比较两手牌, >0 表示 a 胜, <0 表示 b 胜, 0 表示平局
+// null 入参按“无牌”处理，双方都无牌时为平局
 function compareHands(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
   if (a.rank !== b.rank) return a.rank - b.rank;
   for (let i = 0; i < Math.max(a.tiebreakers.length, b.tiebreakers.length); i++) {
     const av = a.tiebreakers[i] || 0;
@@ -139,4 +146,4 @@ function compareHands(a, b) {
   return 0;
 }
 
-module.exports = { evaluateBest, compareHands, HAND_RANK };
+module.exports = { evaluate5, evaluateBest, compareHands, HAND_RANK };

@@ -16,6 +16,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# 设计文档（本地保留，不上传）
+design/
+
 # Trae / 临时
 .trae-html-share-packages/
 .trae/

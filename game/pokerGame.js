@@ -1,7 +1,8 @@
 const { Deck } = require('./deck');
 const { evaluateBest, compareHands } = require('./handEvaluator');
 
-const STAGES = ['preflop', 'flop', 'turn', 'river', 'showdown'];
+const VALID_ACTIONS = new Set(['fold', 'check', 'call', 'raise', 'allin']);
+const MAX_PLAYERS = 7;
 
 class PokerGame {
   constructor(roomId, config = {}) {
@@ -20,12 +21,32 @@ class PokerGame {
     this.startingChips = config.startingChips || 1000;
     this.lastRaiserIndex = -1;
     this.winners = [];
+    this.result = null;
+    this.wentToShowdown = false; // 是否真正进入摊牌（决定底牌可见性）
+    this.withdrawnChips = 0; // 离桌玩家带走的筹码（不参与底池，但参与全局守恒）
+    this.sbIndex = -1;
+    this.bbIndex = -1;
     this.log = [];
     this.handCount = 0;
   }
 
+  isHandInProgress() {
+    return this.stage !== 'waiting' && this.stage !== 'ended';
+  }
+
   addPlayer(id, name, socket) {
-    if (this.players.length >= 7) return null;
+    // 牌局进行中禁止新玩家加入（PRD-01 §3.2）
+    if (this.isHandInProgress()) return null;
+    // 同一 playerId 不允许重复占座
+    if (this.players.some(p => p.id === id)) return null;
+
+    if (this.players.length >= MAX_PLAYERS) {
+      // 满座时优先替换破产座位（PRD-01 §3.9）
+      const broke = this.players.find(p => p.chips <= 0 && !p.disconnected);
+      if (!broke) return null;
+      this.removePlayer(broke.id);
+    }
+
     const player = {
       id, name, socket,
       chips: this.startingChips,
@@ -35,6 +56,7 @@ class PokerGame {
       currentBet: 0,
       totalBet: 0,
       hasActed: false,
+      chipsAtHandStart: this.startingChips,
       isBot: false,
       disconnected: false
     };
@@ -44,12 +66,57 @@ class PokerGame {
 
   removePlayer(id) {
     const idx = this.players.findIndex(p => p.id === id);
-    if (idx >= 0) {
-      this.players.splice(idx, 1);
-      // 调整 buttonIndex
-      if (this.buttonIndex >= this.players.length && this.players.length > 0) {
-        this.buttonIndex = this.buttonIndex % this.players.length;
-      }
+    if (idx < 0) return;
+
+    // 离桌玩家把剩余筹码带走，记入 withdrawnChips 以保证全局筹码守恒可核算
+    const leaving = this.players[idx];
+    if (leaving.chips > 0) this.withdrawnChips += leaving.chips;
+
+    this.players.splice(idx, 1);
+    const n = this.players.length;
+    if (n === 0) {
+      this.currentPlayerIndex = 0;
+      this.buttonIndex = 0;
+      return;
+    }
+
+    // 修正当前行动者索引，避免越界或跳人（PRD-01 §3.5）
+    if (idx < this.currentPlayerIndex) this.currentPlayerIndex--;
+    else if (idx === this.currentPlayerIndex) this.currentPlayerIndex = idx % n;
+    if (this.currentPlayerIndex >= n) this.currentPlayerIndex = 0;
+
+    // 修正按钮位
+    if (idx < this.buttonIndex) this.buttonIndex--;
+    else if (idx === this.buttonIndex) this.buttonIndex = idx % n;
+    if (this.buttonIndex >= n) this.buttonIndex = 0;
+  }
+
+  // 断线：标记弃牌但保留座位到本局结束（PRD-01 §3.5）
+  markFolded(id) {
+    const player = this.players.find(p => p.id === id);
+    if (!player) return false;
+
+    // 已 all-in 的玩家筹码已进池，断线不弃牌
+    if (player.allIn) {
+      player.disconnected = true;
+      return true;
+    }
+
+    const wasActive = !player.folded;
+    player.folded = true;
+    player.disconnected = true;
+
+    const current = this.players[this.currentPlayerIndex];
+    if (wasActive && this.isHandInProgress() && current && current.id === id) {
+      this.checkRoundEnd();
+    }
+    return true;
+  }
+
+  // 本局结束后才真正移除断线玩家
+  removeDisconnectedPlayers() {
+    for (const p of [...this.players]) {
+      if (p.disconnected) this.removePlayer(p.id);
     }
   }
 
@@ -64,6 +131,16 @@ class PokerGame {
   // 获取可继续游戏的玩家（有筹码或未弃牌）
   getEligiblePlayers() {
     return this.players.filter(p => p.chips > 0);
+  }
+
+  // 有效按钮位：从 buttonIndex 起第一个有筹码的玩家
+  getEffectiveButtonIndex() {
+    const n = this.players.length;
+    for (let i = 0; i < n; i++) {
+      const idx = (this.buttonIndex + i) % n;
+      if (this.players[idx].chips > 0) return idx;
+    }
+    return this.buttonIndex;
   }
 
   addLog(msg) {
@@ -87,6 +164,8 @@ class PokerGame {
     this.currentBet = 0;
     this.minRaise = this.bigBlind;
     this.winners = [];
+    this.result = null;
+    this.wentToShowdown = false;
     this.stage = 'preflop';
 
     // 重置玩家状态（没筹码的玩家视为已坐下等待，不参与本局）
@@ -97,6 +176,7 @@ class PokerGame {
       p.currentBet = 0;
       p.totalBet = 0;
       p.hasActed = false;
+      p.chipsAtHandStart = p.chips;
     }
 
     // 发底牌
@@ -136,6 +216,8 @@ class PokerGame {
     this.currentBet = this.bigBlind;
     this.minRaise = this.bigBlind;
 
+    this.sbIndex = sbIdx;
+    this.bbIndex = bbIdx;
     this.currentPlayerIndex = firstIdx;
     this.lastRaiserIndex = bbIdx;
     // 首位行动者若是短筹码 all-in，跳到下一位
@@ -155,7 +237,10 @@ class PokerGame {
   }
 
   placeBet(player, amount) {
+    // 先校验再 clamp：Math.max(0, Math.min(NaN, chips)) 仍然是 NaN
+    if (!Number.isSafeInteger(amount) || amount < 0) return 0;
     const actual = Math.min(amount, player.chips);
+    if (!Number.isSafeInteger(actual) || actual < 0) return 0;
     player.chips -= actual;
     player.currentBet += actual;
     player.totalBet += actual;
@@ -168,10 +253,18 @@ class PokerGame {
 
   // 玩家行动
   playerAction(playerId, action, amount = 0) {
+    if (!VALID_ACTIONS.has(action)) return false;
+
     const player = this.players.find(p => p.id === playerId);
     if (!player || player.folded || player.allIn) return false;
-    if (this.players[this.currentPlayerIndex].id !== playerId) return false;
+
+    const current = this.players[this.currentPlayerIndex];
+    if (!current || current.id !== playerId) return false;
     if (this.stage === 'showdown' || this.stage === 'ended' || this.stage === 'waiting') return false;
+
+    if (action === 'raise') {
+      if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount <= 0) return false;
+    }
 
     const callAmount = this.currentBet - player.currentBet;
 
@@ -215,6 +308,7 @@ class PokerGame {
         this.addLog(`${player.name} 加注到 ${raiseTotal}`);
         break;
       case 'allin':
+        if (player.chips <= 0) return false;
         const allInAmount = player.chips;
         this.placeBet(player, allInAmount);
         const newTotal = player.currentBet;
@@ -240,8 +334,8 @@ class PokerGame {
   // 检查当前轮是否结束
   checkRoundEnd() {
     const inHand = this.getPlayersInHand();
-    // 只剩一人，直接结束牌局
-    if (inHand.length === 1) {
+    // 只剩一人（或无人），直接结束牌局
+    if (inHand.length <= 1) {
       this.endHand();
       return;
     }
@@ -286,8 +380,6 @@ class PokerGame {
     this.currentBet = 0;
     this.minRaise = this.bigBlind;
 
-    const stageIdx = STAGES.indexOf(this.stage);
-
     if (this.stage === 'preflop') {
       // 翻牌：发3张
       this.deck.burn();
@@ -310,9 +402,10 @@ class PokerGame {
       return;
     }
 
-    // 设置下一轮起始玩家：button 后第一位未弃牌玩家
+    // 设置下一轮起始玩家：有效按钮位之后第一位未弃牌玩家
     const n = this.players.length;
-    let startIdx = (this.buttonIndex + 1) % n;
+    const btn = this.getEffectiveButtonIndex();
+    let startIdx = (btn + 1) % n;
     for (let i = 0; i < n; i++) {
       const idx = (startIdx + i) % n;
       if (!this.players[idx].folded && !this.players[idx].allIn) {
@@ -328,58 +421,75 @@ class PokerGame {
     }
   }
 
-  // 计算边池并分配
-  showdown() {
-    this.stage = 'showdown';
-    const inHand = this.getPlayersInHand();
+  // 按“所有玩家的总投入层级”建池（PRD-01 §3.1）
+  buildPots() {
+    const levels = [...new Set(
+      this.players.filter(p => p.totalBet > 0).map(p => p.totalBet)
+    )].sort((a, b) => a - b);
 
-    // 构建边池
-    // 按 totalBet 排序
-    const sorted = [...inHand].sort((a, b) => a.totalBet - b.totalBet);
-    const pots = []; // { amount, contributors: [playerIds] }
-    let prevBet = 0;
-    for (const p of sorted) {
-      if (p.totalBet > prevBet) {
-        const diff = p.totalBet - prevBet;
-        const contributors = this.players.filter(pl => pl.totalBet >= p.totalBet);
-        pots.push({ amount: diff * contributors.length, contributors });
-        prevBet = p.totalBet;
-      }
+    let prev = 0;
+    const pots = [];
+    for (const level of levels) {
+      const diff = level - prev;
+      const contributors = this.players.filter(p => p.totalBet >= level);
+      pots.push({ amount: diff * contributors.length, contributors, level, diff });
+      prev = level;
     }
+    return pots;
+  }
 
-    // 如果只有一人在池中，直接赢得全部
-    if (inHand.length === 1) {
-      const winner = inHand[0];
-      winner.chips += this.pot;
-      this.winners = [{ player: winner, amount: this.pot, hand: null }];
-      this.addLog(`${winner.name} 赢得底池 ${this.pot}`);
-      this.pot = 0;
-      this.stage = 'ended';
-      this.advanceButton();
-      return;
-    }
-
-    // 为每个边池找赢家
-    const payouts = {}; // playerId -> amount
+  // 建池 + 结算：showdown 与 endHand 共用同一套逻辑
+  // 退款（未被跟注的超额 / 无人存活的层）单独记账，绝不进入 winners
+  settle() {
+    const pots = this.buildPots();
+    const refunds = {};
+    const payouts = {};
     const playerHands = {};
-    for (const p of inHand) {
-      playerHands[p.id] = evaluateBest([...p.hand, ...this.community]);
+
+    if (this.wentToShowdown) {
+      for (const p of this.players) {
+        if (!p.folded && p.hand.length === 2) {
+          playerHands[p.id] = evaluateBest([...p.hand, ...this.community]);
+        }
+      }
     }
 
     for (const pot of pots) {
-      const eligible = pot.contributors.filter(p => !p.folded);
-      if (eligible.length === 0) continue;
-      let bestHand = null;
-      let winners = [];
-      for (const p of eligible) {
-        const h = playerHands[p.id];
-        if (!bestHand || compareHands(h, bestHand) > 0) {
-          bestHand = h;
-          winners = [p];
-        } else if (compareHands(h, bestHand) === 0) {
-          winners.push(p);
-        }
+      // 该层只有一个贡献者 = 未被跟注的超额，原路退还（即使已弃牌）
+      if (pot.contributors.length === 1) {
+        const p = pot.contributors[0];
+        refunds[p.id] = (refunds[p.id] || 0) + pot.amount;
+        continue;
       }
+
+      const eligible = pot.contributors.filter(p => !p.folded);
+
+      // 该层没有未弃牌候选：按各自投入原路退回，不得丢弃
+      if (eligible.length === 0) {
+        for (const p of pot.contributors) {
+          refunds[p.id] = (refunds[p.id] || 0) + pot.diff;
+        }
+        continue;
+      }
+
+      let winners;
+      if (this.wentToShowdown) {
+        let bestHand = null;
+        winners = [];
+        for (const p of eligible) {
+          const h = playerHands[p.id];
+          if (!bestHand || compareHands(h, bestHand) > 0) {
+            bestHand = h;
+            winners = [p];
+          } else if (compareHands(h, bestHand) === 0) {
+            winners.push(p);
+          }
+        }
+      } else {
+        // endHand：未弃牌者即赢家
+        winners = eligible;
+      }
+
       const share = Math.floor(pot.amount / winners.length);
       const remainder = pot.amount - share * winners.length;
       for (let i = 0; i < winners.length; i++) {
@@ -388,44 +498,121 @@ class PokerGame {
       }
     }
 
-    // 分配筹码
-    this.winners = [];
+    return { pots, refunds, payouts, playerHands };
+  }
+
+  // 只动筹码，不碰 winners：退款与赢池在可见性层面必须分开
+  applyChips(refunds, payouts) {
+    for (const [pid, amount] of Object.entries(refunds)) {
+      const p = this.players.find(pl => pl.id === pid);
+      if (p && amount > 0) {
+        p.chips += amount;
+        this.addLog(`${p.name} 退还未跟注的 ${amount}`);
+      }
+    }
     for (const [pid, amount] of Object.entries(payouts)) {
       const p = this.players.find(pl => pl.id === pid);
-      if (p) {
-        p.chips += amount;
-        this.winners.push({ player: p, amount, hand: playerHands[pid] });
-        this.addLog(`${p.name} 赢得 ${amount}（${playerHands[pid].name}）`);
-      }
+      if (p && amount > 0) p.chips += amount;
+    }
+  }
+
+  buildWinners(payouts, playerHands) {
+    const winners = [];
+    for (const [pid, amount] of Object.entries(payouts)) {
+      const p = this.players.find(pl => pl.id === pid);
+      if (!p || amount <= 0) continue;
+      const hand = this.wentToShowdown ? (playerHands[pid] || null) : null;
+      winners.push({ player: p, amount, hand });
+      this.addLog(`${p.name} 赢得 ${amount}${hand ? `（${hand.name}）` : ''}`);
+    }
+    return winners;
+  }
+
+  buildResult(pots, refunds, payouts, playerHands) {
+    return {
+      handCount: this.handCount,
+      board: [...this.community],
+      pots: pots.map(p => ({
+        amount: p.amount,
+        eligible: p.contributors.filter(x => !x.folded).map(x => x.id),
+        refunded: p.contributors.length === 1 || p.contributors.every(x => x.folded)
+      })),
+      players: this.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        totalBet: p.totalBet,
+        won: payouts[p.id] || 0,
+        refunded: refunds[p.id] || 0,
+        net: p.chips - (p.chipsAtHandStart || 0),
+        handName: (this.wentToShowdown && !p.folded && playerHands[p.id])
+          ? playerHands[p.id].name
+          : null,
+        shown: !!(this.wentToShowdown && !p.folded)
+      }))
+    };
+  }
+
+  // 结算并结束本局
+  finishHand() {
+    const { pots, refunds, payouts, playerHands } = this.settle();
+    this.applyChips(refunds, payouts);
+    this.winners = this.buildWinners(payouts, playerHands);
+    this.result = this.buildResult(pots, refunds, payouts, playerHands);
+
+    // 结算后断言（测试环境抛错，生产只记日志）
+    const settled = Object.values(refunds).reduce((a, b) => a + b, 0)
+      + Object.values(payouts).reduce((a, b) => a + b, 0);
+    if (settled !== this.pot) {
+      const msg = `结算金额不守恒：settled=${settled} pot=${this.pot}`;
+      if (process.env.NODE_ENV === 'test') throw new Error(msg);
+      this.addLog(msg);
     }
 
     this.pot = 0;
     this.stage = 'ended';
+    this.removeDisconnectedPlayers();
     this.advanceButton();
   }
 
-  endHand() {
-    // 只剩一人，直接赢池
-    const winner = this.getPlayersInHand()[0];
-    if (winner) {
-      winner.chips += this.pot;
-      this.winners = [{ player: winner, amount: this.pot, hand: null }];
-      this.addLog(`${winner.name} 赢得底池 ${this.pot}`);
+  // 计算边池并分配
+  showdown() {
+    this.stage = 'showdown';
+    const inHand = this.getPlayersInHand();
+
+    // 只剩一人（或无人）：无需摊牌，底牌不公开
+    if (inHand.length <= 1) {
+      this.endHand();
+      return;
     }
-    this.pot = 0;
-    this.stage = 'ended';
-    this.advanceButton();
+
+    this.wentToShowdown = true;
+    this.finishHand();
+  }
+
+  endHand() {
+    this.wentToShowdown = false;
+    this.finishHand();
   }
 
   advanceButton() {
     const n = this.players.length;
-    if (n > 0) {
-      this.buttonIndex = (this.buttonIndex + 1) % n;
+    if (n === 0) return;
+    let idx = this.buttonIndex;
+    for (let i = 0; i < n; i++) {
+      idx = (idx + 1) % n;
+      if (this.players[idx].chips > 0) {
+        this.buttonIndex = idx;
+        return;
+      }
     }
+    this.buttonIndex = (this.buttonIndex + 1) % n;
   }
 
   // 返回给客户端的公共状态（隐藏他人底牌）
   getPublicState(selfId) {
+    const self = this.players.find(p => p.id === selfId);
+    const current = this.players[this.currentPlayerIndex];
+
     return {
       roomId: this.roomId,
       stage: this.stage,
@@ -437,11 +624,14 @@ class PokerGame {
       buttonIndex: this.buttonIndex,
       currentPlayerIndex: this.currentPlayerIndex,
       handCount: this.handCount,
+      sbIndex: this.sbIndex,
+      bbIndex: this.bbIndex,
+      result: this.result,
       winners: this.winners.map(w => ({
         name: w.player.name,
         amount: w.amount,
         handName: w.hand ? w.hand.name : null,
-        hand: w.hand ? w.player.hand : null
+        hand: (w.hand && this.wentToShowdown) ? w.player.hand : null
       })),
       players: this.players.map((p, i) => ({
         id: p.id,
@@ -454,12 +644,13 @@ class PokerGame {
         hasActed: p.hasActed,
         disconnected: p.disconnected,
         isSelf: p.id === selfId,
-        hand: (p.id === selfId || this.stage === 'showdown' || this.stage === 'ended') ? p.hand : [],
+        // 只有自己、或真正摊牌后的未弃牌者才可见底牌
+        hand: (p.id === selfId || (this.wentToShowdown && !p.folded)) ? p.hand : [],
         index: i
       })),
-      myTurn: this.players[this.currentPlayerIndex] && this.players[this.currentPlayerIndex].id === selfId,
+      myTurn: current && current.id === selfId,
       minRaiseTo: this.currentBet + this.minRaise,
-      callAmount: this.players.find(p => p.id === selfId) ? Math.max(0, this.currentBet - (this.players.find(p => p.id === selfId).currentBet)) : 0,
+      callAmount: self ? Math.max(0, this.currentBet - self.currentBet) : 0,
       log: this.log.slice(-15)
     };
   }

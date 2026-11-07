@@ -231,12 +231,10 @@ function renderSeats(state) {
 
     let tags = '';
     if (p.index === state.buttonIndex) tags += '<span class="tag btn">D</span>';
-    // 盲注标签（仅在翻牌前显示）
-    if (state.stage === 'preflop' && n > 0) {
-      const sbIdx = n === 2 ? state.buttonIndex : (state.buttonIndex + 1) % n;
-      const bbIdx = n === 2 ? (state.buttonIndex + 1) % n : (state.buttonIndex + 2) % n;
-      if (p.index === sbIdx) tags += '<span class="tag sb">SB</span>';
-      if (p.index === bbIdx) tags += '<span class="tag bb">BB</span>';
+    // 盲注标签（仅在翻牌前显示）：直接使用服务端计算的下标，避免破产座位导致错位
+    if (state.stage === 'preflop') {
+      if (p.index === state.sbIndex) tags += '<span class="tag sb">SB</span>';
+      if (p.index === state.bbIndex) tags += '<span class="tag bb">BB</span>';
     }
 
     const handCards = (p.hand && p.hand.length > 0)
